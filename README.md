@@ -103,11 +103,23 @@ servers replaced by the locked files, which Nix builds into a cache under
 commands LuaRocks starts, such as busted for `luarocks test`, find them
 there.
 
-To add or upgrade a dependency, change the rockspec and lock again:
+To add a dependency, change the rockspec and lock again:
 
 ```zsh
 nix run github:nix-purifiers/luarocks-purifier -- lock
 ```
+
+`lock` keeps the versions that `luarocks.lock` pins. To move to newer
+versions, run `update`, with the names of the rocks to move or with none to
+move them all:
+
+```zsh
+nix run github:nix-purifiers/luarocks-purifier -- update argparse
+```
+
+LuaRocks has no update command of its own, so `update` drops those pins,
+lets `luarocks make` resolve the rocks again within the constraints of the
+rockspecs, writes the result to `luarocks.lock`, and then locks.
 
 A lock of an unchanged project reproduces the lockfile byte for byte, as
 long as the rocks servers serve the same files. For luacheck, a relock
