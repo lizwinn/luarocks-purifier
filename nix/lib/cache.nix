@@ -28,6 +28,9 @@
   fetchsvn,
   fetchcvs,
   lockFile,
+  # The project source, when there is one: the lock reader checks that the
+  # lockfile is current for it (see lock.nix).
+  projectSource ? null,
   # Overrides the files' fetcher (see fetch.nix).
   fetchurl ? null,
   # The C libraries the rocks need, as a list of packages. The default is
@@ -35,7 +38,10 @@
   externalDeps ? null,
 }:
 let
-  lock = import ./lock.nix { inherit lockFile; };
+  lock = import ./lock.nix {
+    inherit lockFile;
+    src = projectSource;
+  };
   fetch = import ./fetch.nix {
     inherit
       lock

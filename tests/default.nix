@@ -33,6 +33,23 @@ let
   # place of the fetchers, so the check covers how LuaRocks gets each kind
   # of checkout offline. tests/interactive.sh covers how the lock run
   # records them, against local repositories.
+  # Lockfiles that the builder must reject, each made from the app
+  # fixture's lockfile at evaluation time.
+  appLock = builtins.fromJSON (builtins.readFile ./fixtures/app/luarocks-purifier.lock.json);
+  appWith =
+    lock:
+    p.buildLuarocksProject {
+      src = ./fixtures/app;
+      lockFile = builtins.toFile "luarocks-purifier.lock.json" (builtins.toJSON lock);
+    };
+  # Evaluating the rock fails, with the message `luarocks-purifier relock`.
+  rejects =
+    name: lock:
+    assert
+      !(builtins.tryEval (appWith lock).packages.app.drvPath).success
+      || throw "the builder accepted the ${name} lockfile";
+    p.runCommand "rejects-${name}" { } "touch $out";
+
   vcs =
     (p.buildLuarocksProject {
       src = ./fixtures/vcs;
@@ -43,6 +60,38 @@ let
 in
 {
   inherit cli;
+
+  # A lockfile made from other rockspecs than the source holds.
+  rejects-stale = rejects "stale" (
+    appLock // { definitionHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; }
+  );
+  # A lockfile without the fields the builder reads.
+  rejects-malformed = rejects "malformed" { version = 1; };
+  # A lockfile of another format version.
+  rejects-old-format = rejects "old-format" (appLock // { version = 0; });
+
+  # A lockfile that lacks a download (lpeg's source rock): the build fails
+  # offline and says to run `luarocks-purifier lock`.
+  rejects-missing-entry =
+    let
+      lock = appLock // {
+        downloads = builtins.filter (d: (d.path or "") != "server/lpeg-1.1.0-2.src.rock") appLock.downloads;
+      };
+      failure = p.testers.testBuildFailure (appWith lock).packages.app;
+    in
+    p.runCommand "rejects-missing-entry" { } ''
+      grep -q 'run `luarocks-purifier lock`' ${failure}/testBuildFailure.log
+      touch $out
+    '';
+
+  # The unit tests of bin/luarocks-purifier (tests/test_cli.py).
+  unit = p.runCommand "luarocks-purifier-unit-tests" { nativeBuildInputs = [ p.python3 ]; } ''
+    cp -r ${../bin} bin
+    mkdir tests
+    cp ${./test_cli.py} tests/test_cli.py
+    python3 -m unittest -v tests/test_cli.py
+    touch $out
+  '';
 
   lib = lib.packages.lib;
   lib-demo = lib.packages.lib-demo;

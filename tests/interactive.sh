@@ -26,7 +26,7 @@ tool() {
 
 nix build --out-link "$work/cli" "$repo#cli"
 cli=$work/cli/bin/luarocks-purifier
-for t in mercurial subversion cvs python3 gitMinimal lua5_4 lua5_4.pkgs.luarocks; do
+for t in mercurial subversion cvs python3 gitMinimal lua5_4 lua5_4.pkgs.luarocks binutils; do
   dir=$(tool "$t")
   PATH=$dir/bin:$PATH
 done
@@ -57,8 +57,42 @@ step "interactive make"
     echo "the interactive make reached luarocks.org"
     exit 1
   fi
+  # The C module records where its C library is, whichever compiler built
+  # it, so it loads outside the shell of the lock run.
+  readelf -d lua_modules/lib/lua/5.4/zlib.so | grep -E 'R(UN)?PATH' | grep -q luarocks-purifier-external
   output=$(lua_modules/bin/app "the cat and the hat")
   echo "$output" | grep -q 'the = 2'
+)
+
+step "a rock missing from the lockfile"
+(
+  cd "$work/app"
+  if "$cli" luarocks install penlight > missing.log 2>&1; then
+    echo "an offline install of a rock outside the lockfile succeeded"
+    exit 1
+  fi
+  # shellcheck disable=SC2016 # the backticks are part of the message
+  grep -q 'run `luarocks-purifier lock`' missing.log
+)
+
+step "an edited hash"
+(
+  cp -r "$repo/tests/fixtures/app" "$work/tampered"
+  rm -rf "$work/tampered/lua_modules" "$work/tampered/.luarocks-purifier"
+  cd "$work/tampered"
+  python3 - <<'EOF'
+import json
+lock = json.load(open("luarocks-purifier.lock.json"))
+entry = next(d for d in lock["downloads"] if d["path"].startswith("server/"))
+entry["hash"] = "sha256-" + "B" * 43 + "="
+json.dump(lock, open("luarocks-purifier.lock.json", "w"), indent=2, sort_keys=True)
+EOF
+  if "$cli" luarocks make > tampered.log 2>&1; then
+    echo "the interactive mode accepted an edited hash"
+    exit 1
+  fi
+  grep -q 'hash mismatch' tampered.log
+  grep -q 'luarocks-purifier relock' tampered.log
 )
 
 step "stale lockfile"
@@ -136,6 +170,33 @@ for d in lock["downloads"]:
 assert {c["kind"] for c in lock["checkouts"]} == {"hg", "svn", "cvs"}
 print("recorded", sorted(kinds))
 EOF
+)
+
+step "a Surround SCM source"
+(
+  sscm=$work/sscm-project
+  mkdir -p "$sscm/rocks"
+  cat > "$sscm/rocks/sscmrock-1.0-1.rockspec" <<'EOF'
+package = "sscmrock"
+version = "1.0-1"
+source = { url = "sscm://sscm.example.org/repo", branch = "main" }
+dependencies = { "lua >= 5.1" }
+build = { type = "builtin", modules = { sscmrock = "sscmrock.lua" } }
+EOF
+  cat > "$sscm/uses-sscm-1.0-1.rockspec" <<'EOF'
+package = "uses-sscm"
+version = "1.0-1"
+source = { url = "git+https://example.org/uses-sscm.git" }
+dependencies = { "lua >= 5.1", "sscmrock == 1.0" }
+build = { type = "builtin", modules = {} }
+EOF
+  LUA_INIT=@$repo/nix/lib/tmpname.lua luarocks-admin make_manifest "$sscm/rocks"
+  cd "$sscm"
+  if "$cli" lock --only-server ./rocks > sscm.log 2>&1; then
+    echo "the lock run accepted a Surround SCM source"
+    exit 1
+  fi
+  grep -q 'Surround SCM' sscm.log
 )
 
 step "publish"

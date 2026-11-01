@@ -68,6 +68,7 @@ in
 }:
 let
   cache = callPackage ./cache.nix {
+    projectSource = source;
     inherit
       lockFile
       externalDeps
@@ -342,7 +343,10 @@ let
           writeConfig "$TMPDIR/config.lua" '{ name = "out", root = "'"$out"'" }'
           export LUAROCKS_CONFIG=$TMPDIR/config.lua
           ${lib.concatMapStrings (file: ''
-            luarocks make ${lib.escapeShellArg file}
+            luarocks make ${lib.escapeShellArg file} || {
+              echo "luarocks-purifier: luarocks make ${file} failed offline. If it could not find a rock or a file, the lockfile lacks it: run \`luarocks-purifier lock\` in the project root." >&2
+              exit 1
+            }
           '') (projectDependencies info ++ [ info.file ])}
           runHook postBuild
         '';

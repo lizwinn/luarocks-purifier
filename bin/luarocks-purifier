@@ -120,16 +120,23 @@ def not_locked(what):
     )
 
 
+# The URL and the output file of a download LuaRocks runs curl for, as in
+# `curl -f -L --user-agent "..." -R -z FILE URL --output FILE`.
+def curl_request(args):
+    url = next((a for a in args if re.match(r"^(https?|ftp|file)://", a)), None)
+    output = args[args.index("--output") + 1] if "--output" in args else None
+    if url is None or output is None:
+        fail(f"unexpected curl arguments from LuaRocks: {args}")
+    return url, output
+
+
 def tool_curl(args):
     if "--version" in args:
         if os.environ.get("LUAROCKS_PURIFIER_MODE") == "record":
             os.execvp("curl", ["curl"] + args)
         print("curl 8.0.0 (luarocks-purifier)")
         return 0
-    url = next((a for a in args if re.match(r"^(https?|ftp|file)://", a)), None)
-    output = args[args.index("--output") + 1] if "--output" in args else None
-    if url is None or output is None:
-        fail(f"unexpected curl arguments from LuaRocks: {args}")
+    url, output = curl_request(args)
     mode = os.environ.get("LUAROCKS_PURIFIER_MODE")
     if mode == "record":
         status = subprocess.call(["curl"] + args)
@@ -404,9 +411,12 @@ def luarocks_env(lua, config, home, tmp, externals):
         }
     )
     # A rockspec often links a C library by name alone (`libraries = { "z" }`)
-    # and leaves its location to the compiler, which reads these. In the
-    # sandbox, the compiler wrapper of nixpkgs finds the libraries instead.
-    for var, sub in (("CPATH", "include"), ("LIBRARY_PATH", "lib")):
+    # and leaves its location to the compiler, which reads CPATH and
+    # LIBRARY_PATH. LD_RUN_PATH makes the linker record the library
+    # directories in the C module, so that it loads them at run time with a
+    # compiler of the system too. In the sandbox, the compiler wrapper of
+    # nixpkgs does all three instead.
+    for var, sub in (("CPATH", "include"), ("LIBRARY_PATH", "lib"), ("LD_RUN_PATH", "lib")):
         dirs = [os.path.join(d, sub) for d in externals]
         if env.get(var):
             dirs.append(env[var])
@@ -437,13 +447,19 @@ def find_rockspecs(given):
     return found
 
 
-def definition_hash(rockspecs):
-    digest = hashlib.sha256()
-    for f in sorted(set(rockspecs) | ({"luarocks.lock"} if os.path.isfile("luarocks.lock") else set())):
-        digest.update(f.encode() + b"\0")
-        with open(f, "rb") as fh:
-            digest.update(fh.read() + b"\0")
-    return "sha256-" + base64.b64encode(digest.digest()).decode()
+# The hash of the files that decide what the lock holds: the rockspecs and
+# the project's luarocks.lock. It is the SHA-256 of one line per file,
+# "<file> <SHA-256 of the file in hex>\n", in file name order, which
+# nix/lib/lock.nix computes the same way to find a stale lockfile.
+def definition_hash(rockspecs, base="."):
+    files = set(rockspecs)
+    if os.path.isfile(os.path.join(base, "luarocks.lock")):
+        files.add("luarocks.lock")
+    lines = ""
+    for f in sorted(files):
+        with open(os.path.join(base, f), "rb") as fh:
+            lines += f"{f} {hashlib.sha256(fh.read()).hexdigest()}\n"
+    return "sha256-" + base64.b64encode(hashlib.sha256(lines.encode()).digest()).decode()
 
 
 def nix_build(args):
@@ -839,7 +855,11 @@ def realize(lock_path):
         stdout=subprocess.DEVNULL,
     )
     if status != 0:
-        fail("could not realize the lockfile with Nix")
+        fail(
+            f"Nix could not fetch what {LOCK_FILE} names (its error is above). "
+            "A hash mismatch means that the lockfile was edited or that a server changed a file it serves; "
+            "run `luarocks-purifier relock` to lock again."
+        )
     return os.path.realpath(out_link)
 
 
@@ -874,7 +894,15 @@ def cmd_luarocks(argv):
     )
     env = luarocks_env(lock["lua"], config, os.path.join(state, "home"), os.path.join(state, "tmp"), externals)
     env.update({"LUAROCKS_PURIFIER_MODE": "serve", "LUAROCKS_PURIFIER_CACHE": cache})
-    os.execve(os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks"), ["luarocks"] + argv, env)
+    status = subprocess.call([os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks")] + argv, env=env)
+    if status != 0:
+        print(
+            "luarocks-purifier: LuaRocks ran offline, on the files of the lockfile alone. "
+            "If it could not find a rock, a version or a file, the lockfile lacks it: "
+            "add the dependency to a rockspec and run `luarocks-purifier lock`.",
+            file=sys.stderr,
+        )
+    return status
 
 
 def cmd_publish(argv):
