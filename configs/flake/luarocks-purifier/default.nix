@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-{ ... }:
+{ closure-lib, ... }:
 {
   config,
   inputs,
@@ -8,7 +8,15 @@
 }:
 {
 
-  imports = [ inputs.flake-parts.flakeModules.partitions ];
+  imports = [
+    inputs.flake-parts.flakeModules.partitions
+    closure-lib.caisson.modules.flake."purifier/purifier-packages"
+  ];
+
+  # The flake's packages are the derivations of the scope
+  # `luarocks-purifier` (see the module purifier-packages of the shared
+  # library).
+  purifier.scope = "luarocks-purifier";
 
   debug = false;
   caisson = {
@@ -19,23 +27,15 @@
     # The scope `luarocks-purifier` is the `default` entry of this flake's
     # package overlay registry (pkg-overlays/): the package set applies it by
     # default, and the flake exports it as `pkgOverlays` and as the plain
-    # `overlays.default`. The scope holds the builder, which is a function
-    # and not a package, so the flake exports the derivations of the scope
-    # itself (see `packages` below).
-    nixpkgs = {
-      packages.export.enabled = false;
-    };
+    # `overlays.default`.
   };
 
-  # The packages of the flake are the derivations of the scope, and
   # `nix run github:nix-purifiers/luarocks-purifier -- lock` runs the command
   # `cli` to lock the project in the current directory.
   perSystem =
     { pkgs, ... }:
     {
-      packages = lib.filterAttrs (_: lib.isDerivation) pkgs.luarocks-purifier // {
-        default = pkgs.luarocks-purifier.cli;
-      };
+      packages.default = pkgs.luarocks-purifier.cli;
     };
 
   partitionedAttrs.checks = "checks";
