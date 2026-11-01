@@ -151,15 +151,20 @@ in
 
   # The command the rock installs runs, with its modules and the C modules
   # of its dependencies, and the outputs the lockfile names are where the
-  # attributes say.
-  app-runs = p.runCommand "app-runs" { } ''
-    output=$(${app.bin.app} "the cat and The hat")
-    echo "$output"
-    echo "$output" | grep -q 'the = 2'
-    test -f ${app.modules.app}
-    test -f ${app.modules."app.words"}
-    touch $out
-  '';
+  # attributes say. `nix build` reads a package's `outputs` as the list of
+  # its derivation outputs, so the builder's attributes must leave it be.
+  app-runs =
+    assert pkgs.lib.assertMsg (
+      app.outputs == [ "out" ]
+    ) "the app package's outputs attribute is not [ \"out\" ]";
+    p.runCommand "app-runs" { } ''
+      output=$(${app.bin.app} "the cat and The hat")
+      echo "$output"
+      echo "$output" | grep -q 'the = 2'
+      test -f ${app.modules.app}
+      test -f ${app.modules."app.words"}
+      touch $out
+    '';
 
   # The source rock holds the rockspec and the project source, which stands
   # in for the git tag the rockspec names.

@@ -424,6 +424,11 @@ def luarocks_env(lua, config, home, tmp, externals):
             env[var] = ":".join(dirs)
     for v in ("5_1", "5_2", "5_3", "5_4"):
         env.pop(f"LUA_INIT_{v}", None)
+    # The luarocks wrapper of nixpkgs adds LuaRocks' own module directories
+    # to LUA_PATH. When LUA_PATH was unset, the result lacks the `;;` that
+    # stands for Lua's default path, and the commands LuaRocks starts (such
+    # as busted for `luarocks test`) lose `./?.lua`.
+    env.setdefault("LUA_PATH", ";;")
     return env
 
 
@@ -489,6 +494,23 @@ def external_dirs(attrs):
             "[ " + " ".join(json.dumps(a) for a in attrs) + " ]",
         ]
     )
+
+
+# The C library of the nixpkgs compiler, which goes last in LuaRocks'
+# external_deps_dirs (see nix/lib/libc.nix).
+def libc_dir():
+    return nix_build(
+        [
+            "--expr",
+            "{ nixpkgs, libc }: (import nixpkgs { }).callPackage libc { }",
+            "--arg",
+            "nixpkgs",
+            os.environ["LUAROCKS_PURIFIER_NIXPKGS"],
+            "--arg",
+            "libc",
+            nix_lib("libc.nix"),
+        ]
+    )[0]
 
 
 def rockspec_info(lua_bin, rockspec):
@@ -705,7 +727,7 @@ def cmd_lock(argv, force):
         tree=os.path.join(state, "tree"),
         cache_dir=os.path.join(state, "cache"),
         servers=resolve_servers(opts["servers"], work),
-        external_dirs=externals,
+        external_dirs=externals + [libc_dir()],
         arch=NEUTRAL_ARCH,
     )
     env = luarocks_env(opts["lua"], config, os.path.join(state, "home"), os.path.join(state, "tmp"), externals)
@@ -910,10 +932,17 @@ def cmd_luarocks(argv):
         tree=os.path.join(root(), "lua_modules"),
         cache_dir=os.path.join(state, "local-cache"),
         servers=resolve_servers(lock["servers"], root(), offline=os.path.join(cache, "server")),
-        external_dirs=externals,
+        external_dirs=externals + [os.path.join(cache, "libc")],
     )
     env = luarocks_env(lock["lua"], config, os.path.join(state, "home"), os.path.join(state, "tmp"), externals)
     env.update({"LUAROCKS_PURIFIER_MODE": "serve", "LUAROCKS_PURIFIER_CACHE": cache})
+    # The commands LuaRocks starts find the rocks of lua_modules, as
+    # `luarocks path` sets up in the sandboxed build. A test suite that
+    # starts `lua` itself needs it.
+    share = os.path.join(root(), "lua_modules", "share", "lua", lua_abi(lock["lua"]))
+    libdir = os.path.join(root(), "lua_modules", "lib", "lua", lua_abi(lock["lua"]))
+    env["LUA_PATH"] = f"{share}/?.lua;{share}/?/init.lua;" + env["LUA_PATH"]
+    env["LUA_CPATH"] = f"{libdir}/?.so;" + env.get("LUA_CPATH", ";;")
     status = subprocess.call([os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks")] + argv, env=env)
     if status != 0:
         print(

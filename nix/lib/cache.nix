@@ -12,6 +12,8 @@
 #                    for git, the identifier LuaRocks reads with `git log`
 #   externals.json   the directories of the C libraries the rocks need,
 #                    which go to LuaRocks' external_deps_dirs
+#   libc             the C library (see libc.nix), which goes last in
+#                    external_deps_dirs
 #
 # luarocks-purifier-curl and luarocks-purifier-git (and -hg, -svn, -cvs)
 # serve LuaRocks' downloads from files.json and checkouts.json.
@@ -95,6 +97,8 @@ let
       paths = p.all or [ p ];
     }
   ) externalPackages;
+
+  libc = pkgs.callPackage ./libc.nix { };
 in
 runCommand "luarocks-purifier-cache"
   {
@@ -111,6 +115,7 @@ runCommand "luarocks-purifier-cache"
         lock
         fetched
         externals
+        libc
         luarocks
         ;
     };
@@ -126,4 +131,5 @@ runCommand "luarocks-purifier-cache"
     cp $filesJson $out/files.json
     cp $checkoutsJson $out/checkouts.json
     cp $externalsJson $out/externals.json
+    ln -s ${libc} $out/libc
   ''

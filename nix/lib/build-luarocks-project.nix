@@ -134,7 +134,9 @@ let
     local_cache = "$TMPDIR/luarocks-local-cache"
     rocks_trees = { $2 }
     rocks_servers = { ${lib.concatMapStringsSep ", " luaString servers} }
-    external_deps_dirs = { ${lib.concatMapStringsSep ", " (d: luaString "${d}") externals} }
+    external_deps_dirs = { ${
+      lib.concatMapStringsSep ", " (d: luaString "${d}") (externals ++ [ cache.libc ])
+    } }
     variables = {
       WGET = "/nonexistent/wget",
       CURL = "${luarocks-purifier-shims}/bin/luarocks-purifier-curl",
@@ -359,7 +361,6 @@ let
         '';
         dontInstall = true;
         passthru = {
-          inherit (info) outputs;
           bin = lib.genAttrs info.outputs.bin (name: "${finalAttrs.finalPackage}/bin/${name}");
           modules =
             builtins.listToAttrs (
