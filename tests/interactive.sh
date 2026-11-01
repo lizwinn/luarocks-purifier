@@ -106,6 +106,14 @@ step "stale lockfile"
 step "lock run of Mercurial, Subversion and CVS sources"
 vcs=$work/vcs-repos
 mkdir -p "$vcs"
+# nixpkgs' CVS aborts (SIGABRT) on a tagged export on aarch64-linux, so the
+# lock run cannot export a CVS source there (see the README's Limits). The
+# vcs flake check covers how a CVS checkout is served on both systems.
+rocks="hgrock svnrock cvsrock"
+if [ "$(uname -m)" = aarch64 ]; then
+  rocks="hgrock svnrock"
+  echo "skipping the CVS source: nixpkgs' CVS aborts on aarch64-linux"
+fi
 (
   # A Mercurial repository with the tag 1.0.
   mkdir "$vcs/hgrock" && cd "$vcs/hgrock"
@@ -124,24 +132,32 @@ mkdir -p "$vcs"
   svn add -q svnrock.lua
   svn commit -q -m init
 )
-(
-  # A CVS module with the tag REL_1_0.
-  cvs -d "$vcs/cvsroot" init
-  mkdir "$vcs/cvsimport" && cd "$vcs/cvsimport"
-  echo 'return "cvs"' > cvsrock.lua
-  cvs -Q -d "$vcs/cvsroot" import -m init cvsrock vendor start
-  cd "$vcs" && cvs -Q -d "$vcs/cvsroot" rtag REL_1_0 cvsrock
-)
-(
-  # The tagged export the lock run makes, run here first so that a failure
-  # shows what CVS reports.
-  mkdir "$vcs/probe" && cd "$vcs/probe"
-  cvs -d "$vcs/cvsroot" export -r REL_1_0 cvsrock
-  test -f cvsrock/cvsrock.lua
-)
+case $rocks in
+  *cvsrock*)
+    (
+      # A CVS module with the tag REL_1_0.
+      cvs -d "$vcs/cvsroot" init
+      mkdir "$vcs/cvsimport" && cd "$vcs/cvsimport"
+      echo 'return "cvs"' > cvsrock.lua
+      cvs -Q -d "$vcs/cvsroot" import -m init cvsrock vendor start
+      cd "$vcs" && cvs -Q -d "$vcs/cvsroot" rtag REL_1_0 cvsrock
+    )
+    (
+      # The tagged export the lock run makes, run here first so that a
+      # failure shows what CVS reports.
+      mkdir "$vcs/probe" && cd "$vcs/probe"
+      cvs -d "$vcs/cvsroot" export -r REL_1_0 cvsrock
+      test -f cvsrock/cvsrock.lua
+    )
+    ;;
+esac
 project=$work/vcs-project
 mkdir -p "$project/rocks"
-for rock in hgrock svnrock cvsrock; do
+dependencies='"lua >= 5.1"'
+requires=""
+for rock in $rocks; do
+  dependencies="$dependencies, \"$rock == 1.0\""
+  requires="$requires require(\"$rock\"),"
   case $rock in
     hgrock) source="url = \"hg://file://$vcs/hgrock\", tag = \"1.0\"" ;;
     svnrock) source="url = \"svn://file://$vcs/svnrepo\", tag = \"1\"" ;;
@@ -159,22 +175,26 @@ cat > "$project/vcs-1.0-1.rockspec" <<EOF
 package = "vcs"
 version = "1.0-1"
 source = { url = "git+https://example.org/vcs.git" }
-dependencies = { "lua >= 5.1", "hgrock == 1.0", "svnrock == 1.0", "cvsrock == 1.0" }
+dependencies = { $dependencies }
 build = { type = "builtin", modules = { vcs = "vcs.lua" } }
 EOF
-echo 'return { require("hgrock"), require("svnrock"), require("cvsrock") }' > "$project/vcs.lua"
+echo "return {$requires }" > "$project/vcs.lua"
 LUA_INIT=@$repo/nix/lib/tmpname.lua luarocks-admin make_manifest "$project/rocks"
 (
   cd "$project"
   "$cli" lock --only-server ./rocks
-  python3 - <<'EOF'
-import json
+  # The kinds of checkout the lock must hold: hg, svn, and cvs when the
+  # CVS source is part of the test.
+  expected=$(for rock in $rocks; do echo "${rock%rock}"; done | sort | tr '\n' ' ')
+  EXPECTED=$expected python3 - <<'EOF'
+import json, os
+expected = set(os.environ["EXPECTED"].split())
 lock = json.load(open("luarocks-purifier.lock.json"))
 kinds = {k for d in lock["downloads"] for k in ("hg", "svn", "cvs") if k in d}
-assert kinds == {"hg", "svn", "cvs"}, kinds
+assert kinds == expected, kinds
 for d in lock["downloads"]:
     assert d["hash"].startswith("sha256-"), d
-assert {c["kind"] for c in lock["checkouts"]} == {"hg", "svn", "cvs"}
+assert {c["kind"] for c in lock["checkouts"]} == expected
 print("recorded", sorted(kinds))
 EOF
 )
