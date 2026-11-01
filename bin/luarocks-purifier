@@ -1,0 +1,889 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+#
+# luarocks-purifier: locks every file a LuaRocks project downloads, so that
+# Nix can build the project offline in its sandbox.
+#
+#   luarocks-purifier lock [options]     lock, when the build definition changed
+#   luarocks-purifier relock [options]   lock, whatever changed
+#   luarocks-purifier luarocks ARGS...   run luarocks offline on the locked files
+#   luarocks-purifier publish ROCKSPEC [UPLOAD-ARGS...]
+#                                        build the source rock with Nix and
+#                                        upload it with `luarocks upload`
+#
+# Options of lock and relock (the lockfile records them, and a later lock
+# reuses them unless they are given again):
+#
+#   --lua VERSION         the Lua to lock for: 5.1, 5.2, 5.3, 5.4 or luajit
+#   --server URL          a rocks server to search before the default ones
+#   --only-server URL     search only this rocks server (repeatable)
+#   --external-dep ATTR   a nixpkgs attribute that provides a C library a rock
+#                         needs (repeatable), such as zlib or openssl
+#   --rockspec FILE       a rockspec of the project (repeatable); the default
+#                         is every *.rockspec in the project root
+#
+# The commands run in the project root. The package that installs this
+# script sets LUAROCKS_PURIFIER_LIB (the Nix library),
+# LUAROCKS_PURIFIER_NIXPKGS (the nixpkgs it builds with),
+# LUAROCKS_PURIFIER_LUAROCKS (a JSON object from Lua version to the luarocks
+# package for it) and LUAROCKS_PURIFIER_SHIMS (the directory of the tool
+# stand-ins below).
+#
+# Run as luarocks-purifier-curl, -git, -hg, -svn or -cvs, the script stands
+# in for that tool when LuaRocks runs it. In the lock run
+# (LUAROCKS_PURIFIER_MODE=record) it runs the real tool and logs what it
+# fetched. Offline (LUAROCKS_PURIFIER_MODE=serve) it copies the locked files
+# and checkouts from the Nix store instead.
+
+import base64
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+LOCK_FILE = "luarocks-purifier.lock.json"
+LOCK_VERSION = 1
+STATE_DIR = ".luarocks-purifier"
+TOOLS = ("curl", "git", "hg", "svn", "cvs")
+LUA_VERSIONS = ("5.1", "5.2", "5.3", "5.4", "luajit")
+DEFAULT_LUA = "5.4"
+
+# LuaRocks' own default: luarocks.org and its two mirrors, one group.
+DEFAULT_SERVERS = [
+    [
+        "https://luarocks.org",
+        "https://raw.githubusercontent.com/rocks-moonscript-org/moonrocks-mirror/master",
+        "https://loadk.com/luarocks",
+    ]
+]
+
+# The architecture of the lock run. LuaRocks searches for rocks of its own
+# architecture and for the platform-neutral kinds (rockspec, src, all). An
+# architecture no server publishes rocks for leaves only the neutral kinds,
+# so one lockfile serves every platform.
+NEUTRAL_ARCH = "purifier-neutral"
+
+def fail(message):
+    print(f"luarocks-purifier: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def sri_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return "sha256-" + base64.b64encode(digest.digest()).decode()
+
+
+def short_hash(text):
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def copy_tree(source, dest):
+    shutil.copytree(source, dest, symlinks=True)
+    for dirpath, dirnames, filenames in os.walk(dest):
+        os.chmod(dirpath, 0o755)
+        for name in filenames:
+            p = os.path.join(dirpath, name)
+            if not os.path.islink(p):
+                os.chmod(p, os.stat(p).st_mode | 0o200)
+
+
+# ---------------------------------------------------------------------------
+# The tool stand-ins.
+
+
+def log_event(event):
+    with open(os.environ["LUAROCKS_PURIFIER_LOG"], "a") as f:
+        f.write(json.dumps(event) + "\n")
+
+
+def serve_table(name):
+    with open(os.path.join(os.environ["LUAROCKS_PURIFIER_CACHE"], name)) as f:
+        return json.load(f)
+
+
+def self_sources():
+    raw = os.environ.get("LUAROCKS_PURIFIER_SELF")
+    return json.loads(raw) if raw else []
+
+
+def not_locked(what):
+    fail(
+        f"{what} is not in {LOCK_FILE}. "
+        "Run `luarocks-purifier lock` after changing a rockspec or the project's dependencies."
+    )
+
+
+def tool_curl(args):
+    if "--version" in args:
+        if os.environ.get("LUAROCKS_PURIFIER_MODE") == "record":
+            os.execvp("curl", ["curl"] + args)
+        print("curl 8.0.0 (luarocks-purifier)")
+        return 0
+    url = next((a for a in args if re.match(r"^(https?|ftp|file)://", a)), None)
+    output = args[args.index("--output") + 1] if "--output" in args else None
+    if url is None or output is None:
+        fail(f"unexpected curl arguments from LuaRocks: {args}")
+    mode = os.environ.get("LUAROCKS_PURIFIER_MODE")
+    if mode == "record":
+        status = subprocess.call(["curl"] + args)
+        if status == 0 and os.path.isfile(output):
+            store = os.path.join(os.environ["LUAROCKS_PURIFIER_DOWNLOADS"], short_hash(url))
+            os.makedirs(store, exist_ok=True)
+            kept = os.path.join(store, os.path.basename(output))
+            shutil.copyfile(output, kept)
+            log_event({"kind": "file", "url": url, "file": kept, "hash": sri_file(kept)})
+        return status
+    for entry in self_sources():
+        if entry.get("kind") == "file" and entry["url"] == url:
+            shutil.copyfile(entry["path"], output)
+            os.chmod(output, 0o644)
+            return 0
+    files = serve_table("files.json")
+    if url not in files:
+        if os.path.basename(url).startswith("manifest"):
+            # A remote manifest: offline, LuaRocks only searches the locked
+            # server, and this keeps it from searching any other.
+            return 22
+        not_locked(url)
+    shutil.copyfile(files[url], output)
+    os.chmod(output, 0o644)
+    return 0
+
+
+def checkout_key(kind, url, ref):
+    return f"{kind} {url} {ref or ''}"
+
+
+def serve_checkout(kind, url, ref, module):
+    # The rockspec's own source, when the sandbox packs its source rock. The
+    # project source stands in for it, whatever tag or branch it names.
+    for entry in self_sources():
+        if entry.get("kind") == kind and entry["url"] == url:
+            copy_tree(entry["path"], module)
+            return {"identifier": entry.get("identifier")}
+    checkouts = serve_table("checkouts.json")
+    key = checkout_key(kind, url, ref)
+    if key not in checkouts:
+        not_locked(f"the {kind} checkout of {url}" + (f" at {ref}" if ref else ""))
+    found = checkouts[key]
+    copy_tree(found["path"], module)
+    return found
+
+
+def positional(args, skip_with_value=()):
+    out = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in skip_with_value:
+            i += 2
+            continue
+        if not a.startswith("-"):
+            out.append(a)
+        i += 1
+    return out
+
+
+def tool_git(args):
+    mode = os.environ.get("LUAROCKS_PURIFIER_MODE")
+    if args[:1] == ["--version"]:
+        if mode == "record":
+            os.execvp("git", ["git"] + args)
+        print("git version 2.40.0 (luarocks-purifier)")
+        return 0
+    command = args[0] if args else ""
+    if command == "clone":
+        ref = next((a.split("=", 1)[1] for a in args if a.startswith("--branch=")), None)
+        url, module = positional(args[1:])[-2:]
+        if mode == "record":
+            status = subprocess.call(["git"] + args)
+            if status == 0:
+                rev = subprocess.check_output(["git", "-C", module, "rev-parse", "HEAD"], text=True).strip()
+                ident = subprocess.check_output(
+                    ["git", "-C", module, "log", "--pretty=format:%ai_%h", "-n", "1"], text=True
+                ).strip()
+                log_event(
+                    {
+                        "kind": "git",
+                        "url": url,
+                        "ref": ref,
+                        "rev": rev,
+                        "identifier": ident,
+                        "dir": os.path.abspath(module),
+                    }
+                )
+            return status
+        found = serve_checkout("git", url, ref, module)
+        # LuaRocks reads the commit of a scm or dev rock with `git log`, then
+        # deletes .git. The recorded answer waits in .git for that call.
+        os.makedirs(os.path.join(module, ".git"), exist_ok=True)
+        with open(os.path.join(module, ".git", "purifier-identifier"), "w") as f:
+            f.write(found.get("identifier") or "")
+        return 0
+    if command == "submodule":
+        if mode == "record":
+            status = subprocess.call(["git"] + args)
+            if status == 0:
+                log_event({"kind": "git-submodules", "dir": os.getcwd()})
+            return status
+        return 0
+    if command == "log":
+        if mode == "record":
+            os.execvp("git", ["git"] + args)
+        marker = os.path.join(os.getcwd(), ".git", "purifier-identifier")
+        if os.path.isfile(marker):
+            with open(marker) as f:
+                sys.stdout.write(f.read())
+        return 0
+    if command == "checkout":
+        if mode == "record":
+            os.execvp("git", ["git"] + args)
+        return 0
+    fail(f"unexpected git command from LuaRocks: {args}")
+
+
+def tool_hg(args):
+    mode = os.environ.get("LUAROCKS_PURIFIER_MODE")
+    if args[:1] == ["--version"]:
+        if mode == "record":
+            os.execvp("hg", ["hg"] + args)
+        print("Mercurial Distributed SCM (version 6.0, luarocks-purifier)")
+        return 0
+    if args[:1] != ["clone"]:
+        fail(f"unexpected hg command from LuaRocks: {args}")
+    ref = args[args.index("--rev") + 1] if "--rev" in args else None
+    url, module = positional(args[1:], skip_with_value=("--rev",))[-2:]
+    if mode == "record":
+        status = subprocess.call(["hg"] + args)
+        if status == 0:
+            rev = subprocess.check_output(["hg", "-R", module, "log", "-r", ".", "-T", "{node}"], text=True).strip()
+            log_event({"kind": "hg", "url": url, "ref": ref, "rev": rev})
+        return status
+    serve_checkout("hg", url, ref, module)
+    return 0
+
+
+def tool_svn(args):
+    mode = os.environ.get("LUAROCKS_PURIFIER_MODE")
+    if args[:1] == ["--version"]:
+        if mode == "record":
+            os.execvp("svn", ["svn"] + args)
+        print("svn, version 1.14.0 (luarocks-purifier)")
+        return 0
+    if args[:1] != ["checkout"]:
+        fail(f"unexpected svn command from LuaRocks: {args}")
+    ref = args[args.index("-r") + 1] if "-r" in args else None
+    url, module = positional(args[1:], skip_with_value=("-r",))[-2:]
+    if mode == "record":
+        status = subprocess.call(["svn"] + args)
+        if status == 0:
+            rev = subprocess.check_output(["svn", "info", "--show-item", "revision", module], text=True).strip()
+            log_event({"kind": "svn", "url": url, "ref": ref, "rev": rev})
+        return status
+    serve_checkout("svn", url, ref, module)
+    return 0
+
+
+def tool_cvs(args):
+    mode = os.environ.get("LUAROCKS_PURIFIER_MODE")
+    if args[:1] == ["--version"]:
+        if mode == "record":
+            os.execvp("cvs", ["cvs"] + args)
+        print("Concurrent Versions System (CVS) 1.12.13 (luarocks-purifier)")
+        return 0
+    root = next((a[2:] for a in args if a.startswith("-d")), None)
+    if root is None or "export" not in args:
+        fail(f"unexpected cvs command from LuaRocks: {args}")
+    rest = args[args.index("export") + 1 :]
+    ref = rest[rest.index("-r") + 1] if "-r" in rest else None
+    module = positional(rest, skip_with_value=("-r",))[-1]
+    if mode == "record":
+        status = subprocess.call(["cvs"] + args)
+        if status == 0:
+            log_event({"kind": "cvs", "url": root, "module": module, "ref": ref})
+        return status
+    serve_checkout("cvs", f"{root} {module}", ref, module)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# The commands.
+
+
+def root():
+    return os.getcwd()
+
+
+def luarocks_packages():
+    raw = os.environ.get("LUAROCKS_PURIFIER_LUAROCKS")
+    if not raw:
+        fail("LUAROCKS_PURIFIER_LUAROCKS is not set; run luarocks-purifier through its package")
+    return json.loads(raw)
+
+
+def shim(tool):
+    return os.path.join(os.environ["LUAROCKS_PURIFIER_SHIMS"], f"luarocks-purifier-{tool}")
+
+
+def lua_string(s):
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+
+
+def lua_list(items):
+    return "{ " + ", ".join(items) + " }"
+
+
+def write_config(path, *, tree, cache_dir, servers, external_dirs, arch=None):
+    lines = [
+        "fs_use_modules = false",
+        "check_certificates = true",
+        f"local_cache = {lua_string(cache_dir)}",
+        f"rocks_trees = {{ {{ name = \"purifier\", root = {lua_string(tree)} }} }}",
+        "rocks_servers = "
+        + lua_list(lua_list(lua_string(u) for u in group) if isinstance(group, list) else lua_string(group) for group in servers),
+        "external_deps_dirs = " + lua_list(lua_string(d) for d in external_dirs),
+        "variables = {",
+        '  WGET = "/nonexistent/wget",',
+    ]
+    for tool, var in (("curl", "CURL"), ("git", "GIT"), ("hg", "HG"), ("svn", "SVN"), ("cvs", "CVS")):
+        lines.append(f"  {var} = {lua_string(shim(tool))},")
+    lines.append("}")
+    if arch:
+        lines.append(f"arch = {lua_string(arch)}")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def luarocks_env(lua, config, home, tmp, externals):
+    env = dict(os.environ)
+    env.update(
+        {
+            "HOME": home,
+            "TMPDIR": tmp,
+            "LUAROCKS_CONFIG": config,
+            # nix/lib/tmpname.lua makes os.tmpname honour TMPDIR.
+            "LUA_INIT": "@" + nix_lib("tmpname.lua"),
+        }
+    )
+    # A rockspec often links a C library by name alone (`libraries = { "z" }`)
+    # and leaves its location to the compiler, which reads these. In the
+    # sandbox, the compiler wrapper of nixpkgs finds the libraries instead.
+    for var, sub in (("CPATH", "include"), ("LIBRARY_PATH", "lib")):
+        dirs = [os.path.join(d, sub) for d in externals]
+        if env.get(var):
+            dirs.append(env[var])
+        if dirs:
+            env[var] = ":".join(dirs)
+    for v in ("5_1", "5_2", "5_3", "5_4"):
+        env.pop(f"LUA_INIT_{v}", None)
+    return env
+
+
+def read_lock():
+    path = os.path.join(root(), LOCK_FILE)
+    if not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def find_rockspecs(given):
+    if given:
+        for r in given:
+            if not os.path.isfile(r):
+                fail(f"no rockspec {r}")
+        return sorted(given)
+    found = sorted(f for f in os.listdir(root()) if f.endswith(".rockspec"))
+    if not found:
+        fail(f"no *.rockspec in {root()}; run luarocks-purifier in the project root, or name one with --rockspec")
+    return found
+
+
+def definition_hash(rockspecs):
+    digest = hashlib.sha256()
+    for f in sorted(set(rockspecs) | ({"luarocks.lock"} if os.path.isfile("luarocks.lock") else set())):
+        digest.update(f.encode() + b"\0")
+        with open(f, "rb") as fh:
+            digest.update(fh.read() + b"\0")
+    return "sha256-" + base64.b64encode(digest.digest()).decode()
+
+
+def nix_build(args):
+    out = subprocess.run(["nix-build", "--no-out-link"] + args, stdout=subprocess.PIPE, text=True)
+    if out.returncode != 0:
+        fail("nix-build failed")
+    return out.stdout.strip().splitlines()
+
+
+def external_dirs(attrs):
+    if not attrs:
+        return []
+    expr = (
+        "{ nixpkgs, attrs }: let pkgs = import nixpkgs { }; lib = pkgs.lib; "
+        "dep = a: lib.attrByPath (lib.splitString \".\" a) (throw \"luarocks-purifier: nixpkgs has no attribute ${a}\") pkgs; "
+        "in map (a: pkgs.symlinkJoin { name = \"luarocks-purifier-external\"; paths = (dep a).all or [ (dep a) ]; }) attrs"
+    )
+    return nix_build(
+        [
+            "--expr",
+            expr,
+            "--arg",
+            "nixpkgs",
+            os.environ["LUAROCKS_PURIFIER_NIXPKGS"],
+            "--arg",
+            "attrs",
+            "[ " + " ".join(json.dumps(a) for a in attrs) + " ]",
+        ]
+    )
+
+
+def rockspec_info(lua_bin, rockspec):
+    script = (
+        "local env = {}; "
+        "local chunk = assert(loadfile(PATH)); "
+        "if setfenv then setfenv(chunk, env) else chunk = assert(loadfile(PATH, 't', env)) end; chunk(); "
+        "local s = env.source or {}; "
+        "local function o(x) io.write((x or ''), '\\n') end; "
+        "o(env.package); o(env.version); o(s.url); o(s.tag or s.branch); o(s.dir); o(s.md5); o(s.pathname); o(s.module)"
+    ).replace("PATH", lua_string(os.path.abspath(rockspec)))
+    out = subprocess.check_output([lua_bin, "-e", script], text=True)
+    package, version, url, ref, sdir, md5, pathname, module = (out.split("\n") + [""] * 8)[:8]
+    return {
+        "file": rockspec,
+        "package": package,
+        "version": version,
+        "source": {
+            k: v
+            for k, v in {
+                "url": url,
+                "ref": ref,
+                "dir": sdir,
+                "md5": md5,
+                "pathname": pathname,
+                "module": module,
+            }.items()
+            if v
+        },
+    }
+
+
+def lua_abi(lua):
+    return "5.1" if lua == "luajit" else lua
+
+
+# The files a rock installed into a tree, read from its rock_manifest: `bin`
+# (commands), `lua` (Lua modules) and `lib` (C modules), each a sorted list
+# of paths relative to that directory of the tree.
+def installed_outputs(lua_bin, tree, lua, package, version):
+    manifest = os.path.join(
+        tree, "lib", "luarocks", f"rocks-{lua_abi(lua)}", package.lower(), version, "rock_manifest"
+    )
+    if not os.path.isfile(manifest):
+        fail(f"the lock run installed no rock_manifest for {package} {version}")
+    script = (
+        "local env = {}; "
+        "local chunk = assert(loadfile(PATH)); "
+        "if setfenv then setfenv(chunk, env) else chunk = assert(loadfile(PATH, 't', env)) end; chunk(); "
+        "local function walk(prefix, t) "
+        "  local keys = {}; for k in pairs(t) do keys[#keys + 1] = k end; table.sort(keys); "
+        "  for _, k in ipairs(keys) do "
+        "    local p = prefix == '' and k or (prefix .. '/' .. k); "
+        "    if type(t[k]) == 'table' then walk(p, t[k]) else io.write(p, '\\n') end "
+        "  end "
+        "end; "
+        "for _, s in ipairs({ 'bin', 'lua', 'lib' }) do "
+        "  if env.rock_manifest[s] then walk(s, env.rock_manifest[s]) end "
+        "end"
+    ).replace("PATH", lua_string(manifest))
+    out = subprocess.check_output([lua_bin, "-e", script], text=True)
+    sections = {"bin": [], "lua": [], "lib": []}
+    for line in out.splitlines():
+        section, _, rest = line.partition("/")
+        sections[section].append(rest)
+    return sections
+
+
+def https_git_url(url):
+    m = re.match(r"^(?:git\+)?ssh://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.*)$", url) or re.match(
+        r"^(?:[^@/]+@)?([^/:]+):(?!//)(.*)$", url
+    )
+    if m:
+        return f"https://{m.group(1)}/{m.group(2)}"
+    if url.startswith("git://"):
+        return "https://" + url[len("git://") :]
+    if url.startswith("git+https://") or url.startswith("git+http://"):
+        return url[len("git+") :]
+    return url
+
+
+def prefetch(kind, event, submodules):
+    if kind == "git":
+        cmd = ["nix-prefetch-git", "--quiet", "--url", https_git_url(event["url"]), "--rev", event["rev"]]
+        if submodules:
+            cmd.append("--fetch-submodules")
+        info = json.loads(subprocess.check_output(cmd, text=True))
+        return info.get("hash") or to_sri(info["sha256"])
+    if kind == "hg":
+        out = subprocess.check_output(["nix-prefetch-hg", event["url"], event["rev"]], text=True)
+    elif kind == "svn":
+        out = subprocess.check_output(["nix-prefetch-svn", event["url"], event["rev"]], text=True)
+    elif kind == "cvs":
+        args = ["nix-prefetch-cvs", event["url"], event["module"]]
+        if event.get("ref"):
+            args.append(event["ref"])
+        out = subprocess.check_output(args, text=True)
+    hashes = [line.strip() for line in out.splitlines() if re.fullmatch(r"[0-9a-z]{52}|sha256-[A-Za-z0-9+/=]{44}", line.strip())]
+    if not hashes:
+        fail(f"nix-prefetch-{kind} printed no hash")
+    return hashes[-1] if hashes[-1].startswith("sha256-") else to_sri(hashes[-1])
+
+
+def to_sri(nix32):
+    return subprocess.check_output(
+        ["nix", "--extra-experimental-features", "nix-command", "hash", "convert", "--hash-algo", "sha256", "--to", "sri", nix32],
+        text=True,
+    ).strip()
+
+
+def server_group(url, servers):
+    for group in servers:
+        members = group if isinstance(group, list) else [group]
+        for base in members:
+            b = base.rstrip("/") + "/"
+            if url.startswith(b) and "/" not in url[len(b) :]:
+                return [m.rstrip("/") for m in members], base.rstrip("/")
+    return None, None
+
+
+def lock_options(argv, previous):
+    opts = {
+        "lua": (previous or {}).get("lua", DEFAULT_LUA),
+        "servers": (previous or {}).get("servers", DEFAULT_SERVERS),
+        "externalDeps": (previous or {}).get("externalDeps", []),
+        "rockspecs": [r["file"] for r in (previous or {}).get("rockspecs", [])],
+    }
+    servers_before, only, externals, rockspecs = [], [], [], []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--lua", "--server", "--only-server", "--external-dep", "--rockspec"):
+            if i + 1 >= len(argv):
+                fail(f"{a} needs a value")
+            v = argv[i + 1]
+            {"--server": servers_before, "--only-server": only, "--external-dep": externals, "--rockspec": rockspecs}.get(
+                a, []
+            ).append(v)
+            if a == "--lua":
+                if v not in LUA_VERSIONS:
+                    fail(f"--lua takes one of {', '.join(LUA_VERSIONS)}")
+                opts["lua"] = v
+            i += 2
+        else:
+            fail(f"unknown option {a}")
+    if only:
+        opts["servers"] = [[u.rstrip("/")] for u in only]
+    elif servers_before:
+        opts["servers"] = [[u.rstrip("/")] for u in servers_before] + DEFAULT_SERVERS
+    if externals:
+        opts["externalDeps"] = sorted(set(externals))
+    if rockspecs:
+        opts["rockspecs"] = rockspecs
+    opts["rockspecs"] = find_rockspecs(opts["rockspecs"] if (rockspecs or opts["rockspecs"]) else [])
+    return opts
+
+
+def copy_project(dest):
+    skip = {".git", STATE_DIR, "lua_modules", "result"}
+
+    def ignore(d, names):
+        return [n for n in names if n in skip and os.path.samefile(d, root())]
+
+    shutil.copytree(root(), dest, symlinks=True, ignore=ignore)
+
+
+def cmd_lock(argv, force):
+    previous = read_lock()
+    opts = lock_options(argv, previous)
+    defn = definition_hash(opts["rockspecs"])
+    if (
+        not force
+        and previous
+        and previous.get("version") == LOCK_VERSION
+        and previous.get("definitionHash") == defn
+        and all(previous.get(k) == opts[k] for k in ("lua", "servers", "externalDeps"))
+        and [r["file"] for r in previous.get("rockspecs", [])] == opts["rockspecs"]
+    ):
+        print(f"luarocks-purifier: {LOCK_FILE} is current")
+        return 0
+
+    packages = luarocks_packages()
+    luarocks_pkg = packages[opts["lua"]]
+    luarocks_bin = os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks")
+    lua_bin = luarocks_pkg["lua"]
+
+    state = os.path.join(root(), STATE_DIR, "lock-run")
+    if os.path.exists(state):
+        shutil.rmtree(state)
+    work = os.path.join(state, "src")
+    for d in ("home", "tmp", "cache", "downloads"):
+        os.makedirs(os.path.join(state, d))
+    copy_project(work)
+    log = os.path.join(state, "log.jsonl")
+    open(log, "w").close()
+    config = os.path.join(state, "config.lua")
+    externals = external_dirs(opts["externalDeps"])
+    write_config(
+        config,
+        tree=os.path.join(state, "tree"),
+        cache_dir=os.path.join(state, "cache"),
+        servers=opts["servers"],
+        external_dirs=externals,
+        arch=NEUTRAL_ARCH,
+    )
+    env = luarocks_env(opts["lua"], config, os.path.join(state, "home"), os.path.join(state, "tmp"), externals)
+    env.update(
+        {
+            "LUAROCKS_PURIFIER_MODE": "record",
+            "LUAROCKS_PURIFIER_LOG": log,
+            "LUAROCKS_PURIFIER_DOWNLOADS": os.path.join(state, "downloads"),
+        }
+    )
+
+    infos = [rockspec_info(lua_bin, r) for r in opts["rockspecs"]]
+    for info in infos:
+        rockspec = info["file"]
+        print(f"luarocks-purifier: locking {rockspec}", file=sys.stderr)
+        if subprocess.call([luarocks_bin, "make", rockspec], cwd=work, env=env) != 0:
+            fail(f"`luarocks make {rockspec}` failed in the lock run")
+        info["outputs"] = installed_outputs(
+            lua_bin, os.path.join(state, "tree"), opts["lua"], info["package"], info["version"]
+        )
+        with open(os.path.join(work, rockspec)) as f:
+            text = f.read()
+        if re.search(r"^\s*test\s*=", text, re.M) or "test_dependencies" in text:
+            if subprocess.call([luarocks_bin, "test", "--prepare", rockspec], cwd=work, env=env) != 0:
+                fail(f"`luarocks test --prepare {rockspec}` failed in the lock run")
+        # The source rock that `luarocks-purifier publish` uploads holds the
+        # rockspec's own source. A source archive pinned by md5 must be the
+        # published one, so the lock run fetches it when it exists already.
+        if info["source"].get("md5"):
+            subprocess.call(
+                [luarocks_bin, "pack", rockspec],
+                cwd=work,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+    with open(log) as f:
+        events = [json.loads(line) for line in f if line.strip()]
+    submodule_dirs = {e["dir"] for e in events if e["kind"] == "git-submodules"}
+
+    downloads, checkouts, seen = [], [], set()
+    self_urls = {i["source"].get("url") for i in infos if i["source"].get("md5")}
+    self_files = []
+    for e in events:
+        kind = e["kind"]
+        if kind == "file":
+            name = os.path.basename(e["url"].split("?")[0]) or "download"
+            if name.startswith("manifest") or e["url"] in seen:
+                continue
+            seen.add(e["url"])
+            group, base = server_group(e["url"], opts["servers"])
+            if group:
+                path = f"server/{name}"
+                mirrors = [f"{m}/{name}" for m in group if m != base]
+            else:
+                path = f"files/{short_hash(e['url'])}/{name}"
+                mirrors = []
+            entry = {"path": path, "url": e["url"], "mirrors": mirrors, "hash": e["hash"]}
+            if e["url"] in self_urls:
+                self_files.append(entry)
+            else:
+                downloads.append(entry)
+        elif kind in ("git", "hg", "svn", "cvs"):
+            request = e["url"] if kind != "cvs" else f"{e['url']} {e['module']}"
+            key = checkout_key(kind, request, e.get("ref"))
+            if key in seen:
+                continue
+            seen.add(key)
+            path = f"vcs/{kind}/{short_hash(key)}"
+            if kind == "git":
+                submodules = e["dir"] in submodule_dirs
+                entry = {
+                    "path": path,
+                    "git": {
+                        "url": https_git_url(e["url"]),
+                        "rev": e["rev"],
+                        "submodules": submodules,
+                        "leaveDotGit": False,
+                    },
+                    "hash": prefetch("git", e, submodules),
+                }
+            elif kind == "cvs":
+                entry = {
+                    "path": path,
+                    "cvs": {"root": e["url"], "module": e["module"], "tag": e.get("ref")},
+                    "hash": prefetch("cvs", e, False),
+                }
+            else:
+                entry = {"path": path, kind: {"url": e["url"], "rev": e["rev"]}, "hash": prefetch(kind, e, False)}
+            downloads.append(entry)
+            checkout = {"kind": kind, "request": request, "ref": e.get("ref"), "path": path}
+            if e.get("identifier"):
+                checkout["identifier"] = e["identifier"]
+            checkouts.append(checkout)
+
+    for info in infos:
+        own = next((d for d in self_files if d["url"] == info["source"].get("url")), None)
+        if own:
+            info["sourceArchive"] = own
+    lock = {
+        "version": LOCK_VERSION,
+        "lua": opts["lua"],
+        "luarocks": luarocks_pkg["version"],
+        "servers": opts["servers"],
+        "externalDeps": opts["externalDeps"],
+        "definitionHash": defn,
+        "rockspecs": infos,
+        "downloads": sorted(downloads, key=lambda d: d["path"]),
+        "checkouts": sorted(checkouts, key=lambda c: c["path"]),
+    }
+    with open(os.path.join(root(), LOCK_FILE), "w") as f:
+        json.dump(lock, f, indent=2, sort_keys=True)
+        f.write("\n")
+    shutil.rmtree(state)
+    print(f"luarocks-purifier: wrote {LOCK_FILE} ({len(downloads)} downloads)", file=sys.stderr)
+    return 0
+
+
+def nix_lib(name):
+    return os.path.join(os.environ["LUAROCKS_PURIFIER_LIB"], name)
+
+
+def realize(lock_path):
+    out_link = os.path.join(root(), STATE_DIR, "cache")
+    os.makedirs(os.path.dirname(out_link), exist_ok=True)
+    status = subprocess.call(
+        [
+            "nix-build",
+            nix_lib("realize.nix"),
+            "--arg",
+            "lockFile",
+            lock_path,
+            "--arg",
+            "nixpkgs",
+            os.environ["LUAROCKS_PURIFIER_NIXPKGS"],
+            "--out-link",
+            out_link,
+        ],
+        stdout=subprocess.DEVNULL,
+    )
+    if status != 0:
+        fail("could not realize the lockfile with Nix")
+    return os.path.realpath(out_link)
+
+
+def cmd_luarocks(argv):
+    lock = read_lock()
+    packages = luarocks_packages()
+    if lock is None or lock.get("definitionHash") != definition_hash([r["file"] for r in lock.get("rockspecs", [])]):
+        reason = "there is no lockfile" if lock is None else f"{LOCK_FILE} is out of date"
+        print(
+            f"luarocks-purifier: {reason}; running luarocks with network access. "
+            "Run `luarocks-purifier lock` to lock the project.",
+            file=sys.stderr,
+        )
+        luarocks_pkg = packages[(lock or {}).get("lua", DEFAULT_LUA)]
+        os.execv(os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks"), ["luarocks"] + argv)
+    luarocks_pkg = packages[lock["lua"]]
+    cache = realize(os.path.join(root(), LOCK_FILE))
+    state = os.path.join(root(), STATE_DIR)
+    for d in ("home", "tmp", "local-cache"):
+        os.makedirs(os.path.join(state, d), exist_ok=True)
+    with open(os.path.join(cache, "externals.json")) as f:
+        externals = json.load(f)
+    config = os.path.join(state, "config.lua")
+    write_config(
+        config,
+        tree=os.path.join(root(), "lua_modules"),
+        cache_dir=os.path.join(state, "local-cache"),
+        servers=[os.path.join(cache, "server")],
+        external_dirs=externals,
+    )
+    env = luarocks_env(lock["lua"], config, os.path.join(state, "home"), os.path.join(state, "tmp"), externals)
+    env.update({"LUAROCKS_PURIFIER_MODE": "serve", "LUAROCKS_PURIFIER_CACHE": cache})
+    os.execve(os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks"), ["luarocks"] + argv, env)
+
+
+def cmd_publish(argv):
+    if not argv:
+        fail("usage: luarocks-purifier publish ROCKSPEC [UPLOAD-ARGS...]")
+    rockspec, upload_args = argv[0], argv[1:]
+    lock = read_lock()
+    if lock is None:
+        fail(f"no {LOCK_FILE}; run `luarocks-purifier lock` first")
+    info = next((r for r in lock["rockspecs"] if r["file"] == rockspec), None)
+    if info is None:
+        fail(f"{rockspec} is not one of the rockspecs in {LOCK_FILE}")
+    if lock.get("definitionHash") != definition_hash([r["file"] for r in lock["rockspecs"]]):
+        fail(f"{LOCK_FILE} is out of date; run `luarocks-purifier lock` first")
+    rock = nix_build(
+        [
+            nix_lib("source-rock.nix"),
+            "--arg",
+            "src",
+            root(),
+            "--arg",
+            "nixpkgs",
+            os.environ["LUAROCKS_PURIFIER_NIXPKGS"],
+            "--argstr",
+            "rockspec",
+            rockspec,
+        ]
+    )[0]
+    rock_file = os.path.join(rock, f"{info['package']}-{info['version']}.src.rock")
+    print(f"luarocks-purifier: uploading {rockspec} with {rock_file}", file=sys.stderr)
+    luarocks_pkg = luarocks_packages()[lock["lua"]]
+    env = dict(os.environ)
+    env["LUA_INIT"] = "@" + nix_lib("tmpname.lua")
+    os.execve(
+        os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks"),
+        ["luarocks", "upload", rockspec, rock_file] + upload_args,
+        env,
+    )
+
+
+def main():
+    name = os.path.basename(sys.argv[0])
+    tool = name[len("luarocks-purifier-") :] if name.startswith("luarocks-purifier-") else None
+    if tool is None and len(sys.argv) > 1 and sys.argv[1].startswith("--tool="):
+        tool = sys.argv[1][len("--tool=") :]
+        sys.argv = sys.argv[:1] + sys.argv[2:]
+    if tool in TOOLS:
+        return {"curl": tool_curl, "git": tool_git, "hg": tool_hg, "svn": tool_svn, "cvs": tool_cvs}[tool](sys.argv[1:])
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__ or open(__file__).read().split("\n\n")[1])
+        return 0
+    command, rest = args[0], args[1:]
+    if command == "lock":
+        return cmd_lock(rest, force=False)
+    if command == "relock":
+        return cmd_lock(rest, force=True)
+    if command == "luarocks":
+        return cmd_luarocks(rest)
+    if command == "publish":
+        return cmd_publish(rest)
+    fail(f"unknown command {command}; the commands are lock, relock, luarocks and publish")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

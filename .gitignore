@@ -1,0 +1,3 @@
+/result*
+.luarocks-purifier/
+lua_modules/

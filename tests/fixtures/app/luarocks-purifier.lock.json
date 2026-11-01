@@ -1,0 +1,115 @@
+{
+  "checkouts": [
+    {
+      "identifier": "2017-10-07 08:26:37 -0700_a305d98",
+      "kind": "git",
+      "path": "vcs/git/098877d3aab107ee",
+      "ref": "v1.2",
+      "request": "https://github.com/brimworks/lua-zlib.git"
+    }
+  ],
+  "definitionHash": "sha256-LcDYynCI/I68UvJ8W/cN+ccxZh4PKweZBnSHevBr4BI=",
+  "downloads": [
+    {
+      "hash": "sha256-eVsgJDBTlbIgDvpOTZKt/RVbt3GKUFagICJb8XmcFu0=",
+      "mirrors": [],
+      "path": "files/64c9ea15625ddebd/rock-luaunit-3.4.zip",
+      "url": "https://github.com/bluebird75/luaunit/releases/download/LUAUNIT_V3_4/rock-luaunit-3.4.zip"
+    },
+    {
+      "hash": "sha256-QzhqYT+ZFhhq9JGfNjkti42tjEQopfjIXrrICsunHus=",
+      "mirrors": [],
+      "path": "files/ca3409b7b471ac32/v3.1.3.tar.gz",
+      "url": "https://github.com/kikito/inspect.lua/archive/v3.1.3.tar.gz"
+    },
+    {
+      "hash": "sha256-6jDQZDWGogrrY0nKjLfbY678IdmqAHx7cWinxWSBeHk=",
+      "mirrors": [
+        "https://raw.githubusercontent.com/rocks-moonscript-org/moonrocks-mirror/master/argparse-0.7.1-1.src.rock",
+        "https://loadk.com/luarocks/argparse-0.7.1-1.src.rock"
+      ],
+      "path": "server/argparse-0.7.1-1.src.rock",
+      "url": "https://luarocks.org/argparse-0.7.1-1.src.rock"
+    },
+    {
+      "hash": "sha256-2sbysjYqvjgdqqkkSPw1GHUpN8deV8FUZeqCX6VYO8Y=",
+      "mirrors": [
+        "https://raw.githubusercontent.com/rocks-moonscript-org/moonrocks-mirror/master/inspect-3.1.3-0.rockspec",
+        "https://loadk.com/luarocks/inspect-3.1.3-0.rockspec"
+      ],
+      "path": "server/inspect-3.1.3-0.rockspec",
+      "url": "https://luarocks.org/inspect-3.1.3-0.rockspec"
+    },
+    {
+      "hash": "sha256-g20xW5IKXN1i4heGxsn61UfE+qEx1Vg+vKZPC2WV7nY=",
+      "mirrors": [
+        "https://raw.githubusercontent.com/rocks-moonscript-org/moonrocks-mirror/master/lpeg-1.1.0-2.src.rock",
+        "https://loadk.com/luarocks/lpeg-1.1.0-2.src.rock"
+      ],
+      "path": "server/lpeg-1.1.0-2.src.rock",
+      "url": "https://luarocks.org/lpeg-1.1.0-2.src.rock"
+    },
+    {
+      "hash": "sha256-rcPiec5n+0d857+Iz7h2B0kdHFDZx4WxVnBmw1Pxkvk=",
+      "mirrors": [
+        "https://raw.githubusercontent.com/rocks-moonscript-org/moonrocks-mirror/master/lua-zlib-1.2-2.rockspec",
+        "https://loadk.com/luarocks/lua-zlib-1.2-2.rockspec"
+      ],
+      "path": "server/lua-zlib-1.2-2.rockspec",
+      "url": "https://luarocks.org/lua-zlib-1.2-2.rockspec"
+    },
+    {
+      "hash": "sha256-lhRpuwnGDFYKtKEl/wKYmANpZ8XmvM12CkhcpFwZJIQ=",
+      "mirrors": [
+        "https://raw.githubusercontent.com/rocks-moonscript-org/moonrocks-mirror/master/luaunit-3.4-1.rockspec",
+        "https://loadk.com/luarocks/luaunit-3.4-1.rockspec"
+      ],
+      "path": "server/luaunit-3.4-1.rockspec",
+      "url": "https://luarocks.org/luaunit-3.4-1.rockspec"
+    },
+    {
+      "git": {
+        "leaveDotGit": false,
+        "rev": "a305d98f473d0a253b6fd740ce60d7d5a5f1cda0",
+        "submodules": false,
+        "url": "https://github.com/brimworks/lua-zlib.git"
+      },
+      "hash": "sha256-rOjgjdZxVrQRIWdduYKH0Y/gcAE/gwWHqzDSwooWYbM=",
+      "path": "vcs/git/098877d3aab107ee"
+    }
+  ],
+  "externalDeps": [
+    "zlib"
+  ],
+  "lua": "5.4",
+  "luarocks": "3.13.0-1",
+  "rockspecs": [
+    {
+      "file": "app-0.1-1.rockspec",
+      "outputs": {
+        "bin": [
+          "app"
+        ],
+        "lib": [],
+        "lua": [
+          "app/words.lua",
+          "app.lua"
+        ]
+      },
+      "package": "app",
+      "source": {
+        "ref": "v0.1",
+        "url": "git+https://github.com/nix-purifiers/luarocks-purifier.git"
+      },
+      "version": "0.1-1"
+    }
+  ],
+  "servers": [
+    [
+      "https://luarocks.org",
+      "https://raw.githubusercontent.com/rocks-moonscript-org/moonrocks-mirror/master",
+      "https://loadk.com/luarocks"
+    ]
+  ],
+  "version": 1
+}
