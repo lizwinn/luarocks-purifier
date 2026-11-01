@@ -174,9 +174,11 @@ LuaRocks and the C compiler look for them.
   see those downloads, so the lock run cannot record them.
 - A dependency on `scm` or `dev` versions locks the commit the branch points
   at during the lock run. A relock moves it to the newest commit.
-- CVS sources lock and build on x86_64-linux only: on aarch64-linux, the CVS
-  of nixpkgs aborts on a tagged export, which both the lock run and nixpkgs'
-  `fetchcvs` make.
+- CVS sources lock and build on x86_64-linux only. On aarch64-linux, the CVS
+  of nixpkgs aborts on every export and checkout, which both the lock run
+  and nixpkgs' `fetchcvs` make: the copy of gnulib's `vasnprintf` that CVS
+  bundles receives a corrupted string argument there and stops at its own
+  consistency check.
 
 ## Credit
 
