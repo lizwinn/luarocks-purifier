@@ -38,16 +38,34 @@ options are saved in the lockfile, and a later `lock` reuses them:
 | `--external-dep ATTR` | A nixpkgs attribute that provides a C library a rock needs, such as `zlib` or `openssl` (repeatable). |
 | `--rockspec FILE` | A rockspec of the project (repeatable). The default is every `*.rockspec` in the project root. |
 
-The flake's `overlays.default` adds one attribute to a package set: the
-scope `luarocks-purifier`. The scope holds the builder
-`buildLuarocksProject`, the command `cli` and the tool stand-ins `shims`. A
-package written for `callPackage` takes the scope by name:
+Build the project from its directory. The command adds no Nix file to the
+project, and `app` is the package name in the rockspec:
 
-```nix
-# package.nix
-{ luarocks-purifier }:
-(luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.app
+```zsh
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/luarocks-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.app'
 ```
+
+This uses the purifier's pinned nixpkgs, matching the lock command above.
+To build with ambient `<nixpkgs>` from your Nix search path instead,
+replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
+Both forms need no Nix files in your project. The build tool and language
+versions must match the lockfile; with ambient nixpkgs, lock with the
+purifier from that package set or pass a compatible toolchain to the builder.
+
+The result is `./result`, the rock installed into a LuaRocks tree, with the
+commands the rock installs in `result/bin`.
+
+A project whose authors want a flake can package itself with one. The flake
+can live in the project's repository or in another one, and it calls the
+builder directly:
 
 ```nix
 {
@@ -62,11 +80,15 @@ package written for `callPackage` takes the scope by name:
       };
     in
     {
-      packages.x86_64-linux.default = pkgs.callPackage ./package.nix { };
+      packages.x86_64-linux.default =
+        (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.app;
     };
 }
 ```
 
+The overlay `overlays.default` adds one attribute to a package set: the
+scope `luarocks-purifier`. The scope holds the builder
+`buildLuarocksProject`, the command `cli` and the tool stand-ins `shims`.
 `luarocks-purifier.buildLuarocksProject.override` replaces any package the
 builder takes, and `luarocks-purifier.overrideScope` replaces what everything
 in the scope shares.
@@ -258,40 +280,19 @@ nix run github:nix-purifiers/luarocks-purifier -- lock
 ```
 
 The lockfile `luarocks-purifier.lock.json` records every rock luacheck
-needs, with a hash for each. Write `package.nix` and `flake.nix` in the
-checkout:
-
-```nix
-# package.nix
-{ luarocks-purifier }:
-(luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.luacheck
-```
-
-```nix
-# flake.nix
-{
-  inputs.luarocks-purifier.url = "github:nix-purifiers/luarocks-purifier";
-  inputs.nixpkgs.follows = "luarocks-purifier/nixpkgs";
-
-  outputs = { nixpkgs, luarocks-purifier, ... }:
-    let
-      pkgs = import nixpkgs {
-        system = "x86_64-linux";
-        overlays = [ luarocks-purifier.overlays.default ];
-      };
-    in
-    {
-      packages.x86_64-linux.default = pkgs.callPackage ./package.nix { };
-    };
-}
-```
-
-Add the files to git, because a flake sees only the files git tracks, then
-build luacheck and run it:
+needs, with a hash for each. Build luacheck from the checkout and run it:
 
 ```zsh
-git add package.nix flake.nix luarocks-purifier.lock.json
-nix run . -- --version
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/luarocks-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.luacheck'
+./result/bin/luacheck --version
 ```
 
 To work on luacheck, run the development commands in the checkout:
