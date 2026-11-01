@@ -1099,6 +1099,13 @@ def run_offline(lock, argv):
 
 
 def cmd_luarocks(argv):
+    if not os.path.exists(lock_path()):
+        print('luarocks-purifier: warning: no luarocks-purifier.lock.json found; running luarocks impurely. Run `luarocks-purifier lock` to use Nix-resolved dependencies.', file=sys.stderr)
+        command = shutil.which("luarocks")
+        if command is None:
+            packages = luarocks_packages()
+            command = os.path.join(packages[sorted(packages)[-1]]["luarocks"], "bin", "luarocks")
+        os.execvp(command, [command, *argv])
     return run_offline(current_lock(), argv)
 
 

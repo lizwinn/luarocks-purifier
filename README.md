@@ -1,64 +1,111 @@
 # luarocks-purifier
 
-luarocks-purifier is a command and a Nix library for
-[LuaRocks](https://luarocks.org) projects. It records every file LuaRocks
-downloads for a project in a lockfile, so that Nix can build the project's
-rocks offline in its sandbox. The project needs no generated Nix files: the
-lockfile is JSON, and it names every output of every rock, so Nix reads it
-directly.
+luarocks-purifier keeps LuaRocks's development workflow on locked,
+Nix-resolved dependencies. Use the normal build and test commands in your
+working tree; building the project itself in the Nix sandbox is an
+optional next step.
+
+It follows the [purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
 
 luarocks-purifier is one of the [nix-purifiers](https://github.com/nix-purifiers),
 and it meets their contract: the same builder interface, commands, checks
 and README sections as every other purifier.
 
+## Installation
+
+Install the integration into your Nix profile once:
+
+```sh
+nix profile install 'github:nix-purifiers/luarocks-purifier'
+```
+
+The required wrapper is `luarocks-purifier luarocks`; pass your usual tool
+arguments after it. With no purifier lockfile, it warns on standard error
+and runs the ordinary tool with impure resolution.
+
+`nix shell` makes an integration available temporarily instead of installing
+it. Keep using the activation steps below where a project environment or
+prefetched cache is required.
+
 ## Quickstart
 
-Lock the project, in its root, and commit the lockfile
-`luarocks-purifier.lock.json`:
+Install Nix, then run the following from your existing project's root.
+The setup prepares the locked dependencies and the integration that
+LuaRocks's normal commands use:
+
+```zsh
+nix run github:nix-purifiers/luarocks-purifier -- lock
+nix run github:nix-purifiers/luarocks-purifier -- prefetch
+nix run github:nix-purifiers/luarocks-purifier -- luarocks make
+nix run github:nix-purifiers/luarocks-purifier -- luarocks test
+```
+
+Commit the lockfiles that the lock command writes, including the build
+tool's own lockfile when it has one. Keep using the project's usual build,
+test and editor commands with this setup. Nix provides the locked
+dependencies; the development commands above run outside the Nix sandbox.
+No project Nix files are needed for this workflow.
+
+Sandboxed builds of the whole project are an optional
+[next step](#building-the-project-with-nix).
+
+## Development loop
+
+LuaRocks has no plugin mechanism, so luarocks-purifier is a command that
+runs LuaRocks itself, with the locked files in place of the network. The
+development loop is LuaRocks' own commands, run on the locked files:
+
+```zsh
+nix run github:nix-purifiers/luarocks-purifier -- luarocks make
+nix run github:nix-purifiers/luarocks-purifier -- luarocks test
+```
+
+`luarocks-purifier luarocks ARGS...` runs `luarocks ARGS...` with the rocks
+servers replaced by the locked files, which Nix builds into a cache under
+`.luarocks-purifier/`. Rocks go to `lua_modules/` in the project, and the
+commands LuaRocks starts, such as busted for `luarocks test`, find them
+there.
+
+To add a dependency, change the rockspec and lock again:
 
 ```zsh
 nix run github:nix-purifiers/luarocks-purifier -- lock
 ```
 
-The lock run builds each rockspec of the project with LuaRocks, with an
-empty cache, and records what LuaRocks fetches: rockspecs and rocks from
-the rocks servers, the source archives the rockspecs name, and git,
-Mercurial, Subversion and CVS checkouts. It records them by URL and
-SHA-256, with the commands, Lua modules and C modules each rock installs.
-LuaRocks' own lockfile, `luarocks.lock`, pins versions and records no URLs
-or hashes, so luarocks-purifier writes `luarocks-purifier.lock.json` for the
-downloads, and it reads `luarocks.lock` when the project has one. Its
-options are saved in the lockfile, and a later `lock` reuses them:
-
-| Option | Meaning |
-|---|---|
-| `--lua VERSION` | The Lua to lock for: `5.1`, `5.2`, `5.3`, `5.4` (the default) or `luajit`. |
-| `--server URL` | A rocks server to search before luarocks.org. A directory of the project is a local rocks server. |
-| `--only-server URL` | A rocks server to search instead of luarocks.org (repeatable). |
-| `--external-dep ATTR` | A nixpkgs attribute that provides a C library a rock needs, such as `zlib` or `openssl` (repeatable). |
-| `--rockspec FILE` | A rockspec of the project (repeatable). The default is every `*.rockspec` in the project root. |
-
-Build the project from its directory. The command adds no Nix file to the
-project, and `app` is the package name in the rockspec:
+`lock` keeps the versions that `luarocks.lock` pins. A project often has no
+`luarocks.lock`. Then `lock` resolves the newest versions the rockspecs
+allow and records them in `luarocks-purifier.lock.json`, and it leaves the
+project's files alone. To pin versions in `luarocks.lock`, or to move to
+newer versions, run `update`, with the names of the rocks to move or with
+none to move them all:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/luarocks-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.app'
+nix run github:nix-purifiers/luarocks-purifier -- update argparse
 ```
 
-This uses the purifier's pinned nixpkgs, matching the lock command above.
-To build with ambient `<nixpkgs>` from your Nix search path instead,
-replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
-Both forms need no Nix files in your project. The build tool and language
-versions must match the lockfile; with ambient nixpkgs, lock with the
-purifier from that package set or pass a compatible toolchain to the builder.
+LuaRocks has no update command of its own, so `update` drops those pins,
+lets `luarocks make` resolve the rocks again within the constraints of the
+rockspecs, writes the result to `luarocks.lock`, and then locks.
+
+A lock of an unchanged project reproduces the lockfile byte for byte, as
+long as the rocks servers serve the same files.
+
+A project can keep its lockfiles outside its repository, as the last
+subsection of Examples shows. Every command then takes `--lockfile PATH` before its
+other arguments, and `--tool-lockfile PATH` for `luarocks.lock`. The
+environment variables `LUAROCKS_PURIFIER_LOCKFILE` and
+`LUAROCKS_PURIFIER_TOOL_LOCKFILE` name the same paths, and the options take
+precedence over them. With `--tool-lockfile`, `update` writes `luarocks.lock`
+there and leaves the copy in the project as it is, and the commands start
+from the copy in the project until the outside one exists.
+
+## Building the project with Nix
+
+Once the native development workflow is working, you can also build and
+test the whole project in the Nix sandbox. For this step, keep a flake or
+another Nix build definition in the project's repository, or maintain an
+external packaging repository that points at its sources and lockfiles.
+The builder consumes the same lockfiles as the development workflow.
 
 The result is `./result`, the rock installed into a LuaRocks tree, with the
 commands the rock installs in `result/bin`.
@@ -126,55 +173,29 @@ tools such as SBOM generators: `purifier`, the download `entries`, the
 of date or changed by hand. The builder checks it with `checkLock` of the
 shared purifier library.
 
-## Development loop
+### One-off builds without a project Nix file
 
-LuaRocks has no plugin mechanism, so luarocks-purifier is a command that
-runs LuaRocks itself, with the locked files in place of the network. The
-development loop is LuaRocks' own commands, run on the locked files:
-
-```zsh
-nix run github:nix-purifiers/luarocks-purifier -- luarocks make
-nix run github:nix-purifiers/luarocks-purifier -- luarocks test
-```
-
-`luarocks-purifier luarocks ARGS...` runs `luarocks ARGS...` with the rocks
-servers replaced by the locked files, which Nix builds into a cache under
-`.luarocks-purifier/`. Rocks go to `lua_modules/` in the project, and the
-commands LuaRocks starts, such as busted for `luarocks test`, find them
-there.
-
-To add a dependency, change the rockspec and lock again:
+For an ad hoc build, the builder can also be evaluated directly from the
+project root. Replace the example package name with one from your project:
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- lock
+nix build --impure --expr '
+  let
+    purifier = builtins.getFlake "github:nix-purifiers/luarocks-purifier";
+    pkgs = import purifier.inputs.nixpkgs {
+      system = builtins.currentSystem;
+      overlays = [ purifier.overlays.default ];
+    };
+  in
+  (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.app'
 ```
 
-`lock` keeps the versions that `luarocks.lock` pins. A project often has no
-`luarocks.lock`. Then `lock` resolves the newest versions the rockspecs
-allow and records them in `luarocks-purifier.lock.json`, and it leaves the
-project's files alone. To pin versions in `luarocks.lock`, or to move to
-newer versions, run `update`, with the names of the rocks to move or with
-none to move them all:
-
-```zsh
-nix run github:nix-purifiers/luarocks-purifier -- update argparse
-```
-
-LuaRocks has no update command of its own, so `update` drops those pins,
-lets `luarocks make` resolve the rocks again within the constraints of the
-rockspecs, writes the result to `luarocks.lock`, and then locks.
-
-A lock of an unchanged project reproduces the lockfile byte for byte, as
-long as the rocks servers serve the same files.
-
-A project can keep its lockfiles outside its repository, as the last
-subsection of Examples shows. Every command then takes `--lockfile PATH` before its
-other arguments, and `--tool-lockfile PATH` for `luarocks.lock`. The
-environment variables `LUAROCKS_PURIFIER_LOCKFILE` and
-`LUAROCKS_PURIFIER_TOOL_LOCKFILE` name the same paths, and the options take
-precedence over them. With `--tool-lockfile`, `update` writes `luarocks.lock`
-there and leaves the copy in the project as it is, and the commands start
-from the copy in the project until the outside one exists.
+This uses the purifier's pinned nixpkgs, matching the lock command above.
+To build with ambient `<nixpkgs>` from your Nix search path instead,
+replace `import purifier.inputs.nixpkgs` with `import <nixpkgs>`.
+Both forms need no Nix files in your project. The build tool and language
+versions must match the lockfile; with ambient nixpkgs, lock with the
+purifier from that package set or pass a compatible toolchain to the builder.
 
 ## Working offline
 
@@ -267,6 +288,11 @@ Limits:
   at during the lock run. A relock moves it to the newest commit.
 
 ## Examples
+
+For day-to-day work on these projects, use the native-tool setup and
+commands in [Quickstart](#quickstart) and [Development loop](#development-loop).
+The Nix expressions below show optional sandboxed packaging of those
+projects.
 
 ### Package luacheck
 
