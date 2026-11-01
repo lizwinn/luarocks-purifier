@@ -97,6 +97,7 @@
         ]
       },
       "package": "app",
+      "projectDependencies": [],
       "source": {
         "ref": "v0.1",
         "url": "git+https://github.com/nix-purifiers/luarocks-purifier.git"

@@ -307,7 +307,11 @@ def tool_cvs(args):
     if mode == "record":
         status = subprocess.call(["cvs"] + args)
         if status == 0:
-            log_event({"kind": "cvs", "url": root, "module": module, "ref": ref})
+            # The NAR hash of the export, the hash nixpkgs' fetchcvs checks.
+            # (nix-prefetch-cvs passes `-r TAG` to CVS as one argument, so
+            # it cannot export a tag.)
+            nar = subprocess.check_output(["nix-hash", "--type", "sha256", "--sri", module], text=True).strip()
+            log_event({"kind": "cvs", "url": root, "module": module, "ref": ref, "hash": nar})
         return status
     serve_checkout("cvs", f"{root} {module}", ref, module)
     return 0
@@ -556,11 +560,6 @@ def prefetch(kind, event, submodules):
         out = subprocess.check_output(["nix-prefetch-hg", event["url"], event["rev"]], text=True)
     elif kind == "svn":
         out = subprocess.check_output(["nix-prefetch-svn", event["url"], event["rev"]], text=True)
-    elif kind == "cvs":
-        args = ["nix-prefetch-cvs", event["url"], event["module"]]
-        if event.get("ref"):
-            args.append(event["ref"])
-        out = subprocess.check_output(args, text=True)
     hashes = [line.strip() for line in out.splitlines() if re.fullmatch(r"[0-9a-z]{52}|sha256-[A-Za-z0-9+/=]{44}", line.strip())]
     if not hashes:
         fail(f"nix-prefetch-{kind} printed no hash")
@@ -765,7 +764,7 @@ def cmd_lock(argv, force):
                 entry = {
                     "path": path,
                     "cvs": {"root": e["url"], "module": e["module"], "tag": e.get("ref")},
-                    "hash": prefetch("cvs", e, False),
+                    "hash": e["hash"],
                 }
             else:
                 entry = {"path": path, kind: {"url": e["url"], "rev": e["rev"]}, "hash": prefetch(kind, e, False)}
@@ -843,7 +842,9 @@ def cmd_luarocks(argv):
             file=sys.stderr,
         )
         luarocks_pkg = packages[(lock or {}).get("lua", DEFAULT_LUA)]
-        os.execv(os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks"), ["luarocks"] + argv)
+        env = dict(os.environ)
+        env["LUA_INIT"] = "@" + nix_lib("tmpname.lua")
+        os.execve(os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks"), ["luarocks"] + argv, env)
     luarocks_pkg = packages[lock["lua"]]
     cache = realize(os.path.join(root(), LOCK_FILE))
     state = os.path.join(root(), STATE_DIR)
@@ -893,10 +894,31 @@ def cmd_publish(argv):
     rock_file = os.path.join(rock, f"{info['package']}-{info['version']}.src.rock")
     print(f"luarocks-purifier: uploading {rockspec} with {rock_file}", file=sys.stderr)
     luarocks_pkg = luarocks_packages()[lock["lua"]]
+    # The user's own LuaRocks configuration with certificate checks on, which
+    # LuaRocks leaves off by default (see nix/lib/publish-config.lua).
+    # LuaRocks keeps the upload API key in upload_config.lua beside the
+    # configuration, so that file links to the user's own.
+    publish_dir = os.path.join(root(), STATE_DIR, "publish")
+    os.makedirs(publish_dir, exist_ok=True)
+    user_dir = os.path.join(os.path.expanduser("~"), ".luarocks")
+    os.makedirs(user_dir, exist_ok=True)
+    text = ""
+    user_config = os.path.join(user_dir, f"config-{lua_abi(lock['lua'])}.lua")
+    if os.path.isfile(user_config):
+        with open(user_config) as f:
+            text = f.read() + "\n"
+    with open(nix_lib("publish-config.lua")) as f:
+        text += f.read()
+    config = os.path.join(publish_dir, "config.lua")
+    with open(config, "w") as f:
+        f.write(text)
+    link = os.path.join(publish_dir, "upload_config.lua")
+    if os.path.lexists(link):
+        os.remove(link)
+    os.symlink(os.path.join(user_dir, "upload_config.lua"), link)
     env = dict(os.environ)
     env["LUA_INIT"] = "@" + nix_lib("tmpname.lua")
-    # Certificate checks on, which LuaRocks leaves off by default.
-    env["LUAROCKS_CONFIG"] = nix_lib("publish-config.lua")
+    env["LUAROCKS_CONFIG"] = config
     os.execve(
         os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks"),
         ["luarocks", "upload", rockspec, rock_file] + upload_args,
