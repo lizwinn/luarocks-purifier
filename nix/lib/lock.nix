@@ -1,66 +1,20 @@
 # SPDX-License-Identifier: MIT
 #
 # Reads a luarocks-purifier lockfile (written by `luarocks-purifier lock`).
-# Given the project source, it also checks that the lockfile was made from
-# the rockspecs and luarocks.lock the source holds.
+# It throws the message of lock-problem.nix for a lockfile that is not
+# valid, was changed by hand, or, given the project source, is out of date.
 {
   lockFile,
   src ? null,
+  luarocksLock ? null,
 }:
 let
-  text = builtins.readFile lockFile;
-  parsed = builtins.fromJSON text;
-
-  supportedVersion = import ./lock-version.nix;
-
-  relock = "Run `luarocks-purifier relock` in the project root.";
-  fail = message: throw "luarocks-purifier: ${toString lockFile} ${message} ${relock}";
-
-  # The fields every lockfile has, which the builder reads.
-  fields = [
-    "version"
-    "lua"
-    "servers"
-    "externalDeps"
-    "definitionHash"
-    "rockspecs"
-    "downloads"
-    "checkouts"
-  ];
-  missing = builtins.filter (f: !(parsed ? ${f})) fields;
-
-  lock =
-    if !builtins.isAttrs parsed then
-      fail "is not a luarocks-purifier lockfile."
-    else if missing != [ ] then
-      fail "is not a valid lockfile: it has no ${builtins.concatStringsSep ", " missing}."
-    else if parsed.version != supportedVersion then
-      throw "luarocks-purifier: ${toString lockFile} has lock format version ${toString parsed.version}; this library reads version ${toString supportedVersion}. Run `luarocks-purifier relock` with the luarocks-purifier version that provides this library."
-    else
-      parsed;
-
-  # The definition hash of the source, as `luarocks-purifier lock` computes
-  # it (see definition_hash in bin/luarocks-purifier).
-  definitionHash =
-    let
-      files = builtins.sort builtins.lessThan (
-        map (r: r.file) lock.rockspecs
-        ++ (if builtins.pathExists (src + "/luarocks.lock") then [ "luarocks.lock" ] else [ ])
-      );
-      lines = builtins.concatStringsSep "" (
-        map (f: "${f} ${builtins.hashFile "sha256" (src + "/${f}")}\n") files
-      );
-    in
-    builtins.convertHash {
-      hash = builtins.hashString "sha256" lines;
-      hashAlgo = "sha256";
-      toHashFormat = "sri";
-    };
-
-  current =
-    src == null
-    || !(builtins.all (r: builtins.pathExists (src + "/${r.file}")) lock.rockspecs)
-    || definitionHash == lock.definitionHash;
+  parsed = builtins.fromJSON (builtins.readFile lockFile);
+  problem = import ./lock-problem.nix {
+    inherit parsed src luarocksLock;
+    name = toString lockFile;
+  };
+  lock = if problem != null then throw problem else parsed;
 
   # A store path name from a file name. Store path names allow
   # [A-Za-z0-9+._?=-], must not start with a dot, and are at most 211
@@ -82,12 +36,6 @@ let
 
   isFile = d: d ? url;
 in
-assert
-  builtins.all (r: builtins.pathExists (src + "/${r.file}")) (
-    if src == null then [ ] else lock.rockspecs
-  )
-  || fail "names a rockspec that the project source does not have.";
-assert current || fail "is out of date: a rockspec or luarocks.lock changed since the lock run.";
 lock
 // {
   inherit storeName;

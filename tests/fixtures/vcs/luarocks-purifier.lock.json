@@ -19,6 +19,7 @@
       "request": "svn.example.org/svnrock"
     }
   ],
+  "contentHash": "sha256-CP2jOqI0063eVnoy5rxe9HgRHnj8Jyi83/2C0ShHVPQ=",
   "definitionHash": "sha256-Zjw8yrsitarDHZMEKOcREdxwxHsFrX+h4YTs0FRAr5g=",
   "downloads": [
     {
@@ -70,6 +71,7 @@
         "ref": "v1.0",
         "url": "git+https://example.org/vcs.git"
       },
+      "tests": false,
       "version": "1.0-1"
     }
   ],
@@ -78,5 +80,5 @@
       "rocks"
     ]
   ],
-  "version": 2
+  "version": 3
 }

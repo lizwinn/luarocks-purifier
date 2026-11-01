@@ -1,84 +1,73 @@
 # SPDX-License-Identifier: MIT
 #
 # buildLuarocksProject: builds the rocks of a LuaRocks project offline in
-# the Nix sandbox, from its luarocks-purifier lockfile.
+# the Nix sandbox, from its luarocks-purifier lockfile. The flake's library
+# holds it as `lib.luarocks-purifier.buildLuarocksProject`.
 #
-#   (buildLuarocksProject { src = ./.; }).packages.<package>
-#
-# is the rock that a rockspec of the project defines, installed with its
-# dependencies into a LuaRocks tree (bin/, share/lua/, lib/lua/ and
-# lib/luarocks/). The lockfile names every output of each rock, so each is
-# an attribute, known without building:
-#
-#   .bin.<command>     the path of a command the rock installs
-#   .modules.<module>  the path of a Lua or C module, such as "foo.bar"
-#   .rock              the source rock that `luarocks upload` publishes,
-#                      packed in the sandbox: a directory holding
-#                      <package>-<version>.src.rock
-#
-# `rockspecs.<file>` holds the same packages by rockspec file name, and
-# `cache` is the offline cache of the lockfile (see cache.nix).
+#   buildLuarocksProject { inherit pkgs; src = ./.; }
 #
 # Arguments:
 #
+#   pkgs          the package set to build with
 #   src           the project root
-#   lockFile      the lockfile; the default is src's luarocks-purifier.lock.json
+#   lockFile      the lockfile; the default is src's
+#                 luarocks-purifier.lock.json. A lockfile outside src
+#                 replaces any copy in it.
+#   luarocksLock  LuaRocks' own lockfile (luarocks.lock), for a src that
+#                 holds none; it replaces any copy in src
 #   externalDeps  the C libraries the rocks need, as a list of packages; the
 #                 default is the nixpkgs attributes the lockfile names
-#   doCheck       run `luarocks test` for each rock (default false)
-#   fetchurl, fetchgit, fetchhg, fetchsvn, fetchcvs
-#                 fetchers that replace those of nixpkgs for the locked
-#                 downloads, for credentials or other mirrors; the shared
+#   fetchers      fetchers that replace those of nixpkgs for the locked
+#                 downloads, by name (fetchurl, fetchgit, fetchhg, fetchsvn,
+#                 fetchcvs), for credentials or a company mirror; the shared
 #                 library's fetchEntry calls each with the arguments of the
 #                 nixpkgs fetcher of the same name
+#
+# The result:
+#
+#   packages.<package>  the rock that a rockspec of the project defines,
+#                       installed with its dependencies into a LuaRocks tree
+#                       (bin/, share/lua/, lib/lua/ and lib/luarocks/), with
+#                       the attributes .bin.<command> and .modules.<module>
+#                       (such as "foo.bar"), which the lockfile names, so
+#                       they are known without building
+#   tests               `luarocks test` of every rockspec that has a test
+#                       suite, in the sandbox
+#   release             the source rocks that `luarocks-purifier publish`
+#                       uploads, packed in the sandbox: a directory holding
+#                       <package>-<version>.src.rock for each rockspec
+#   fetches             the download entries of the lockfile, in the shape
+#                       of the shared purifier library
+{ purifier }:
 {
-  lib,
   pkgs,
-  stdenv,
-  callPackage,
-  luarocks-purifier-shims,
-  # The `purifier` namespace of the shared nix-purifiers library.
-  purifier,
-  unzip,
-  zip,
-  gnutar,
-  gzip,
-  bzip2,
-  xz,
-  cmake,
-  gnumake,
-}:
-{
   src,
   lockFile ? src + "/luarocks-purifier.lock.json",
+  luarocksLock ? null,
   externalDeps ? null,
-  doCheck ? false,
-  fetchurl ? null,
-  fetchgit ? null,
-  fetchhg ? null,
-  fetchsvn ? null,
-  fetchcvs ? null,
+  fetchers ? { },
 }:
 let
-  cache = callPackage ./cache.nix {
-    projectSource = source;
-    inherit lockFile externalDeps purifier;
-    fetchers = lib.filterAttrs (_: f: f != null) {
-      inherit
-        fetchurl
-        fetchgit
-        fetchhg
-        fetchsvn
-        fetchcvs
-        ;
-    };
+  inherit (pkgs) lib stdenv;
+  luarocks-purifier-shims = pkgs.callPackage ../../pkgs/shims { };
+
+  cache = pkgs.callPackage ./cache.nix {
+    projectSource = cleanSource;
+    inherit
+      lockFile
+      luarocksLock
+      externalDeps
+      purifier
+      fetchers
+      ;
   };
   inherit (cache) lock luarocks externals;
   lua = (import ./lua.nix { inherit pkgs; }).${lock.lua};
   abi = lock.luaAbi;
 
-  # The project source, without the files of a local run.
-  source = lib.cleanSourceWith {
+  # The project source, without the files of a local run and without the
+  # lockfile, which the build reads from lockFile.
+  cleanSource = lib.cleanSourceWith {
     name = "source";
     src = lib.cleanSource src;
     filter =
@@ -86,8 +75,18 @@ let
       !(builtins.elem (baseNameOf path) [
         ".luarocks-purifier"
         "lua_modules"
+        "luarocks-purifier.lock.json"
       ]);
   };
+  source =
+    if luarocksLock == null then
+      cleanSource
+    else
+      pkgs.runCommand "source" { } ''
+        cp -r ${cleanSource} $out
+        chmod -R u+w $out
+        cp ${luarocksLock} $out/luarocks.lock
+      '';
 
   luaString = s: builtins.toJSON s;
 
@@ -159,6 +158,8 @@ let
     luarocks
     lua
     luarocks-purifier-shims
+  ]
+  ++ (with pkgs; [
     unzip
     zip
     gnutar
@@ -167,7 +168,7 @@ let
     xz
     cmake
     gnumake
-  ];
+  ]);
 
   # How LuaRocks requests the rockspec's own source, which the source rock
   # holds: the tool it runs and the URL it passes (LuaRocks drops a "git+"
@@ -270,7 +271,7 @@ let
         }
       ''
     else if r.md5 != null then
-      throw "luarocks-purifier: ${info.file} pins its source archive ${r.url} by md5, and the lock run could not download it. Publish the archive (by tagging the release), then run `luarocks-purifier relock` so that the lockfile holds it."
+      throw "luarocks-purifier: ${info.file} pins its source archive ${r.url} by md5, and the lock run could not download it. Publish the archive (by tagging the release), then run `luarocks-purifier lock` so that the lockfile holds it."
     else
       ''
         mkdir -p "$TMPDIR/self-archive/${r.dir}"
@@ -332,7 +333,7 @@ let
         buildInputs = externals;
         dontUseCmakeConfigure = true;
         dontConfigure = true;
-        inherit doCheck;
+        doCheck = false;
         buildPhase = ''
           runHook preBuild
           ${writeConfig}
@@ -375,7 +376,6 @@ let
                 value = "${finalAttrs.finalPackage}/lib/lua/${abi}/${f}";
               }) info.outputs.lib
             );
-          rock = rockFor info;
           inherit lua luarocks;
         };
         meta = lib.optionalAttrs (info.outputs.bin != [ ]) {
@@ -385,20 +385,33 @@ let
     in
     package;
 
-  byFile = builtins.listToAttrs (
-    map (info: {
-      name = info.file;
-      value = packageFor info;
-    }) lock.rockspecs
-  );
-in
-{
-  inherit cache;
-  rockspecs = byFile;
   packages = builtins.listToAttrs (
     map (info: {
       name = info.package;
-      value = byFile.${info.file};
+      value = packageFor info;
     }) lock.rockspecs
   );
+
+  # The rock of a rockspec built again, with its test suite run after the
+  # build.
+  testFor =
+    info:
+    packages.${info.package}.overrideAttrs {
+      pname = "${info.package}-tests";
+      doCheck = true;
+    };
+in
+{
+  inherit packages;
+  tests = pkgs.linkFarm "tests" (
+    map (info: {
+      name = info.package;
+      path = testFor info;
+    }) (builtins.filter (info: info.tests) lock.rockspecs)
+  );
+  release = pkgs.symlinkJoin {
+    name = "release";
+    paths = map rockFor lock.rockspecs;
+  };
+  fetches = lock.downloads;
 }

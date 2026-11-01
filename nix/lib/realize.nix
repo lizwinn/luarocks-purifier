@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 #
-# What `luarocks-purifier luarocks` builds for the interactive mode: the
-# offline cache of the lockfile, the same derivation the sandboxed build
-# uses. The CLI builds it with an out-link, which is the GC root that keeps
-# every locked file alive.
+# What `luarocks-purifier prefetch` and `luarocks-purifier luarocks` build:
+# the offline cache of the lockfile, the same derivation the sandboxed build
+# uses. The CLI builds it with an out-link in the project, which is the GC
+# root that keeps every locked file alive. The CLI checks that the lockfile
+# is current for the project before it builds this.
 {
   lockFile,
   # The nixpkgs the CLI was built with.

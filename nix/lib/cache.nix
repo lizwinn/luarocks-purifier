@@ -32,6 +32,8 @@
   # The project source, when there is one: the lock reader checks that the
   # lockfile is current for it (see lock.nix).
   projectSource ? null,
+  # LuaRocks' own lockfile, when it comes from outside the project source.
+  luarocksLock ? null,
   # Fetchers that replace those of nixpkgs for the entries, by name
   # (fetchurl, fetchgit, fetchhg, fetchsvn, fetchcvs), for credentials or
   # mirrors. purifier.fetchEntry calls each with the arguments of the
@@ -43,7 +45,7 @@
 }:
 let
   lock = import ./lock.nix {
-    inherit lockFile;
+    inherit lockFile luarocksLock;
     src = projectSource;
   };
   fetch = purifier.fetchEntry ({ inherit pkgs; } // fetchers);

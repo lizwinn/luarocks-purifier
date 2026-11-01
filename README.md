@@ -7,29 +7,25 @@ rocks offline in its sandbox. The project needs no generated Nix files: the
 lockfile is JSON, and it names every output of every rock, so Nix reads it
 directly.
 
-- **The lock run.** `luarocks-purifier lock` builds each rockspec of the
-  project with LuaRocks, with an empty cache, and records what LuaRocks
-  fetches: rockspecs and rocks from the rocks servers, the source archives
-  the rockspecs name, and git, Mercurial, Subversion and CVS checkouts. It
-  writes them to `luarocks-purifier.lock.json` by URL and SHA-256, with the
-  commands, Lua modules and C modules each rock installs.
-- **Sandboxed builds.** `buildLuarocksProject` builds each rock with
-  `luarocks make` in the Nix sandbox, from the locked files alone.
-- **The interactive mode.** `luarocks-purifier luarocks ARGS...` runs
-  LuaRocks on the locked files, offline, so `luarocks make` in the project
-  installs what the Nix build installs.
-- **Publishing what Nix built.** `luarocks-purifier publish ROCKSPEC` packs
-  the source rock in the sandbox and uploads it with `luarocks upload`.
+luarocks-purifier is one of the [nix-purifiers](https://github.com/nix-purifiers),
+and it meets their contract: the same builder interface, commands, checks
+and README sections as every other purifier.
 
-## Use
+## Quickstart
 
-Lock the project, in its root, and commit the lockfile:
+Lock the project, in its root, and commit the lockfile
+`luarocks-purifier.lock.json`:
 
 ```zsh
 nix run github:nix-purifiers/luarocks-purifier -- lock
 ```
 
-The lock options are saved in the lockfile, and a later `lock` reuses them:
+The lock run builds each rockspec of the project with LuaRocks, with an
+empty cache, and records what LuaRocks fetches: rockspecs and rocks from
+the rocks servers, the source archives the rockspecs name, and git,
+Mercurial, Subversion and CVS checkouts. It records them by URL and
+SHA-256, with the commands, Lua modules and C modules each rock installs.
+Its options are saved in the lockfile, and a later `lock` reuses them:
 
 | Option | Meaning |
 |---|---|
@@ -39,17 +35,7 @@ The lock options are saved in the lockfile, and a later `lock` reuses them:
 | `--external-dep ATTR` | A nixpkgs attribute that provides a C library a rock needs, such as `zlib` or `openssl` (repeatable). |
 | `--rockspec FILE` | A rockspec of the project (repeatable). The default is every `*.rockspec` in the project root. |
 
-`lock` locks again only when a rockspec, the project's `luarocks.lock` or
-an option changed. `relock` locks whatever changed.
-
-The flake's `overlays.default` adds `buildLuarocksProject` to a package
-set, and a package written for `callPackage` takes it by name:
-
-```nix
-# package.nix
-{ buildLuarocksProject }:
-(buildLuarocksProject { src = ./.; }).packages.app
-```
+Build the project with the builder in the flake's library:
 
 ```nix
 {
@@ -58,138 +44,172 @@ set, and a package written for `callPackage` takes it by name:
 
   outputs = { nixpkgs, luarocks-purifier, ... }:
     let
-      pkgs = import nixpkgs {
-        system = "x86_64-linux";
-        overlays = [ luarocks-purifier.overlays.default ];
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      project = luarocks-purifier.lib.luarocks-purifier.buildLuarocksProject {
+        inherit pkgs;
+        src = ./.;
       };
     in
     {
-      packages.x86_64-linux.app = pkgs.callPackage ./package.nix { };
+      packages.x86_64-linux.default = project.packages.app;
+      checks.x86_64-linux.tests = project.tests;
     };
 }
 ```
 
-### The outputs
-
-`(buildLuarocksProject { src = ./.; }).packages.<package>` is the rock a
-rockspec of the project defines, installed with its dependencies into a
-LuaRocks tree (`bin/`, `share/lua/`, `lib/lua/` and `lib/luarocks/`). The
-lockfile names what each rock installs, so each output is an attribute that
-Nix knows without building:
-
-| Attribute | What it is |
-|---|---|
-| `.bin.<command>` | The path of a command the rock installs. |
-| `.modules.<module>` | The path of a Lua or C module, by module name, such as `.modules."app.words"`. |
-| `.rock` | The source rock that `luarocks upload` publishes, packed in the sandbox: a directory that holds `<package>-<version>.src.rock`. |
-
-`rockspecs.<file>` holds the same packages by rockspec file name. When a
-rockspec depends on another rockspec of the same project, the build
-installs that one first, from the project source.
-
-The builder takes these arguments besides `src`:
+The builder takes these arguments:
 
 | Argument | Meaning |
 |---|---|
-| `lockFile` | The lockfile. The default is `luarocks-purifier.lock.json` in `src`. |
+| `pkgs` | The package set to build with. |
+| `src` | The project root. |
+| `lockFile` | The lockfile. The default is `luarocks-purifier.lock.json` in `src`. A lockfile outside `src` replaces any copy in it, so a packaging flake can build a project whose author does not use luarocks-purifier. |
+| `luarocksLock` | LuaRocks' own lockfile, `luarocks.lock`, for a `src` that holds none. It replaces any copy in `src`. |
 | `externalDeps` | The C libraries the rocks need, as a list of packages. The default is the nixpkgs attributes the lockfile names. |
-| `doCheck` | Run `luarocks test` for each rock. The default is false. |
-| `fetchurl`, `fetchgit`, `fetchhg`, `fetchsvn`, `fetchcvs` | Fetchers that replace those of nixpkgs for the locked downloads, for credentials or other mirrors, for instance a `fetchgit` with access to a private repository. Each is called with the arguments of the nixpkgs fetcher of the same name. |
+| `fetchers` | Fetchers that replace those of nixpkgs for the locked downloads, by name: `fetchurl`, `fetchgit`, `fetchhg`, `fetchsvn` and `fetchcvs`. A company mirror or credentials go into `fetchers.fetchurl`. The shared [purifier](https://github.com/nix-purifiers/purifier) library calls each with the arguments of the nixpkgs fetcher of the same name. |
 
-The lockfile's download entries have the shapes of the shared
-[purifier](https://github.com/nix-purifiers/purifier) library, which fetches
-them.
+The result has these attributes, each known without building:
 
-### The interactive mode
+| Attribute | What it is |
+|---|---|
+| `packages.<package>` | The rock a rockspec of the project defines, installed with its dependencies into a LuaRocks tree (`bin/`, `share/lua/`, `lib/lua/` and `lib/luarocks/`). `.bin.<command>` is the path of a command it installs, and `.modules.<module>` the path of a Lua or C module, such as `.modules."app.words"`. |
+| `tests` | `luarocks test` of every rockspec with a test suite, in the sandbox. |
+| `release` | The source rocks that `luarocks-purifier publish` uploads, packed in the sandbox: a directory holding `<package>-<version>.src.rock` for each rockspec. |
+| `fetches` | The download entries of the lockfile, in the shape of the shared purifier library. |
+
+When a rockspec depends on another rockspec of the same project, the build
+installs that one first, from the project source.
+
+## Everyday loop
+
+The everyday loop is LuaRocks' own commands, run on the locked files:
 
 ```zsh
 nix run github:nix-purifiers/luarocks-purifier -- luarocks make
+nix run github:nix-purifiers/luarocks-purifier -- luarocks test
 ```
 
-runs `luarocks make` with the rocks servers replaced by the locked files,
-which Nix builds into a cache under `.luarocks-purifier/` (one GC root).
-Rocks go to `lua_modules/` in the project. A dependency that is not in the
-lockfile fails with a hint to run `luarocks-purifier lock`. When the
-lockfile is missing or out of date, the command warns and runs LuaRocks with
-network access.
+`luarocks-purifier luarocks ARGS...` runs `luarocks ARGS...` with the rocks
+servers replaced by the locked files, which Nix builds into a cache under
+`.luarocks-purifier/`. Rocks go to `lua_modules/` in the project, and the
+commands LuaRocks starts, such as busted for `luarocks test`, find them
+there.
 
-### Publishing
+To add or upgrade a dependency, change the rockspec and lock again:
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- publish app-0.1-1.rockspec --api-key KEY
+nix run github:nix-purifiers/luarocks-purifier -- lock
 ```
 
-builds the rockspec's source rock with Nix and uploads the rockspec and the
-source rock with `luarocks upload`, with certificate checks on. LuaRocks
-keeps the API key in `~/.luarocks/upload_config.lua`, as `luarocks upload`
-does. The arguments after the rockspec go to `luarocks upload`.
+A lock of an unchanged project reproduces the lockfile byte for byte, as
+long as the rocks servers serve the same files. For luacheck, a relock
+takes about 40 seconds.
 
-The source rock holds the rockspec's own source:
+Every command takes `--lockfile PATH` before its other arguments, for a
+lockfile outside the project root.
 
-- For a git, Mercurial, Subversion or CVS source, the project source stands
-  in for the tag or branch the rockspec names.
-- For a source archive without an md5, the project source is packed as the
-  archive, in the directory the rockspec names.
-- A source archive pinned by `md5` is the published archive, which the lock
-  run downloads when it exists. Publish the archive (by tagging the release)
-  before you lock.
+## Offline work
 
-## Sources
+```zsh
+nix run github:nix-purifiers/luarocks-purifier -- prefetch
+```
 
-Every source LuaRocks fetches is locked:
+realizes everything the everyday loop needs in the Nix store and keeps it
+with two garbage-collector roots in `.luarocks-purifier/`. `cache` holds
+the locked files and C libraries, and `tools` holds luarocks-purifier with
+its LuaRocks, Lua, C compiler and nixpkgs. `prefetch` also installs the
+dependencies and test dependencies of every rockspec into `lua_modules`.
+After it, `luarocks-purifier luarocks make` and `luarocks-purifier luarocks
+test` work with the network cut off, and CI checks that they do.
+
+## Editor
+
+After `prefetch`, `lua_modules` holds every dependency as a standard
+LuaRocks tree. Point the language server at it. For
+[lua-language-server](https://luals.github.io), a `.luarc.json` in the
+project root sets its library path:
+
+```json
+{
+  "runtime.version": "Lua 5.4",
+  "workspace.library": ["lua_modules/share/lua/5.4"]
+}
+```
+
+For LuaJIT and Lua 5.1, the directory is `lua_modules/share/lua/5.1`.
+
+## Errors and fixes
+
+Every error names the command that fixes it.
+
+| Error | Fix |
+|---|---|
+| A rockspec or `luarocks.lock` changed since the lock run (the lockfile is out of date). | `luarocks-purifier lock` |
+| The lockfile was changed after `lock` wrote it (its `contentHash` does not match its content). | `luarocks-purifier lock` |
+| The lockfile is not valid JSON, lacks a field, or has another format version. | `luarocks-purifier lock` |
+| LuaRocks needs a rock, a version or a file the lockfile lacks. | Add the dependency to a rockspec, then `luarocks-purifier lock`. |
+| A rock links a C library LuaRocks cannot find. | `luarocks-purifier lock --external-dep ATTR`, with the nixpkgs attribute of the library. |
+| A server changed a file it serves (a hash mismatch when Nix fetches it). | `luarocks-purifier lock` |
+
+The commands, the interactive mode and the Nix build all stop on these;
+none of them falls back to the network.
+
+A rock that links a C library from outside LuaRocks names it under
+`external_dependencies`, and `--external-dep` gives the nixpkgs package.
+The lockfile records the attribute name, and the lock run, the interactive
+mode and the sandboxed build put the library's headers and libraries where
+LuaRocks and the C compiler look for them. The libraries of the C library
+itself, such as `m`, `dl`, `pthread` and `rt`, need no option.
+
+## Sources supported and refused
 
 | Source | How it is locked |
 |---|---|
 | Rockspecs and rocks of a rocks server | A file entry, with the server's mirrors (luarocks.org has two) as fallbacks. |
 | `http://`, `https://` and `ftp://` archives | A file entry. |
 | `git+https://`, `git+ssh://`, `git://`, `git+file://` | A git checkout at the commit of the tag or branch, with submodules when the rockspec format is 3.0, as LuaRocks fetches it. An SSH URL is locked under the HTTPS URL of the same host. |
-| `hg+https://`, `hg://` | A Mercurial checkout at the revision of the tag. |
-| `svn://` | A Subversion checkout at the revision. |
+| `hg+https://`, `hg://` | A Mercurial checkout at the revision of the tag, with subrepositories. |
+| `svn://` | A Subversion checkout at the revision, with externals. |
 | `cvs://` | A CVS export of the module at the tag. |
 | A rocks server in the project | Served from the project source. |
-
-A rockspec whose source is Surround SCM (`sscm://`) stops the lock run.
-Surround SCM is proprietary, its server needs credentials for every
-checkout, and nixpkgs has no fetcher for it.
 
 The lock run searches only for platform-neutral rocks (rockspecs, source
 rocks and `all` rocks), so one lockfile builds on every platform, and C
 code is compiled in the sandbox.
 
-## C libraries
+These are refused or limited:
 
-A rock that links a C library from outside LuaRocks names it under
-`external_dependencies`. Lock with `--external-dep` and the nixpkgs
-attribute of the library:
-
-```zsh
-nix run github:nix-purifiers/luarocks-purifier -- lock --external-dep zlib
-```
-
-The lockfile records the attribute name. The lock run, the interactive mode
-and the sandboxed build put the library's headers and libraries where
-LuaRocks and the C compiler look for them.
-
-## Limits
-
+- A rockspec whose source is Surround SCM (`sscm://`) stops the lock run.
+  Surround SCM is proprietary, its server needs credentials for every
+  checkout, and nixpkgs has no fetcher for it.
+- A CVS source without a tag stops the lock run, because nothing would pin
+  its content.
+- CVS sources lock and build on x86_64-linux only. On aarch64-linux, the CVS
+  of nixpkgs aborts on every export and checkout, which both the lock run
+  and nixpkgs' `fetchcvs` make: the copy of gnulib's `vasnprintf` that CVS
+  bundles receives a corrupted string argument there.
 - A rock whose build downloads files itself, past LuaRocks (for instance
   with a CMake `ExternalProject`), fails in the sandbox: LuaRocks does not
   see those downloads, so the lock run cannot record them.
 - A dependency on `scm` or `dev` versions locks the commit the branch points
   at during the lock run. A relock moves it to the newest commit.
-- CVS sources lock and build on x86_64-linux only. On aarch64-linux, the CVS
-  of nixpkgs aborts on every export and checkout, which both the lock run
-  and nixpkgs' `fetchcvs` make: the copy of gnulib's `vasnprintf` that CVS
-  bundles receives a corrupted string argument there and stops at its own
-  consistency check.
 
-## Credit
+## Real-world projects
+
+| Project | What CI checks |
+|---|---|
+| [luacheck](https://github.com/lunarmodules/luacheck) v1.2.0 | The flake check `real-luacheck` builds luacheck, unchanged, from a lockfile kept outside its source, and runs it on its own source. The CI job `real-luacheck` adds the three test dependencies that luacheck's own CI installs by hand (`lanes`, `luautf8` and `luasocket`) to its rockspec, locks it, runs its 460 specs in the sandbox, prefetches, and runs them again with `luarocks test` with the network cut off. |
+
+luacheck found three defects, which are fixed: the C library of the
+compiler was not where LuaRocks looks for `rt`, a builder attribute hid a
+package's `outputs`, and the interactive mode dropped Lua's default module
+path.
+
+## Credits
 
 The purifier idea was inspired by nixcloud's
 [cargo (libnix)](https://github.com/nixcloud/cargo). luarocks-purifier
 follows the design of
-[sbt-purifier](https://github.com/nix-purifiers/sbt-purifier).
-
-## License
-
-MIT
+[sbt-purifier](https://github.com/nix-purifiers/sbt-purifier), and fetches
+with the shared [purifier](https://github.com/nix-purifiers/purifier)
+library. luarocks-purifier is under the MIT license.

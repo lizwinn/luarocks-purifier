@@ -4,15 +4,20 @@
 # luarocks-purifier: locks every file a LuaRocks project downloads, so that
 # Nix can build the project offline in its sandbox.
 #
-#   luarocks-purifier lock [options]     lock, when the build definition changed
-#   luarocks-purifier relock [options]   lock, whatever changed
+#   luarocks-purifier lock [options]     run LuaRocks and record its downloads
+#   luarocks-purifier prefetch           realize the locked files with a GC
+#                                        root and install the dependencies
+#                                        into lua_modules, for offline work
 #   luarocks-purifier luarocks ARGS...   run luarocks offline on the locked files
 #   luarocks-purifier publish ROCKSPEC [UPLOAD-ARGS...]
-#                                        build the source rock with Nix and
-#                                        upload it with `luarocks upload`
+#                                        build the release with Nix and upload
+#                                        its source rock with `luarocks upload`
 #
-# Options of lock and relock (the lockfile records them, and a later lock
-# reuses them unless they are given again):
+# Every command takes `--lockfile PATH` before its other arguments, for a
+# lockfile outside the project root.
+#
+# Options of lock (the lockfile records them, and a later lock reuses them
+# unless they are given again):
 #
 #   --lua VERSION         the Lua to lock for: 5.1, 5.2, 5.3, 5.4 or luajit
 #   --server URL          a rocks server to search before the default ones
@@ -46,7 +51,10 @@ import sys
 import tempfile
 
 LOCK_FILE = "luarocks-purifier.lock.json"
-LOCK_VERSION = 2
+LOCK_VERSION = 3
+# The lockfile the commands read and write: LOCK_FILE in the project root,
+# or the path given with --lockfile.
+lock_path_given = None
 STATE_DIR = ".luarocks-purifier"
 TOOLS = ("curl", "git", "hg", "svn", "cvs", "sscm")
 LUA_VERSIONS = ("5.1", "5.2", "5.3", "5.4", "luajit")
@@ -432,12 +440,53 @@ def luarocks_env(lua, config, home, tmp, externals):
     return env
 
 
+def lock_path():
+    return lock_path_given or os.path.join(root(), LOCK_FILE)
+
+
 def read_lock():
-    path = os.path.join(root(), LOCK_FILE)
+    path = lock_path()
     if not os.path.isfile(path):
         return None
     with open(path) as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError as e:
+            fail(f"{path} is not valid JSON ({e}). Run `luarocks-purifier lock` in the project root.")
+
+
+# The content hash of a lockfile: the SHA-256, as an SRI hash, of the
+# lockfile without its contentHash field, as JSON with sorted keys and no
+# whitespace, which nix/lib/content-hash.nix computes with builtins.toJSON.
+def content_hash(lock):
+    rest = {k: v for k, v in lock.items() if k != "contentHash"}
+    text = json.dumps(rest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256-" + base64.b64encode(hashlib.sha256(text.encode()).digest()).decode()
+
+
+# What is wrong with the lockfile for the project, as the message that
+# names the command that fixes it, or None. nix/lib/lock-problem.nix makes
+# the same checks at evaluation.
+def lock_problem(lock):
+    path = lock_path()
+    fix = "Run `luarocks-purifier lock` in the project root."
+    if lock is None:
+        return f"there is no {path}. {fix}"
+    if not isinstance(lock, dict):
+        return f"{path} is not a luarocks-purifier lockfile. {fix}"
+    if lock.get("version") != LOCK_VERSION:
+        return (
+            f"{path} has lock format version {json.dumps(lock.get('version'))}; "
+            f"this luarocks-purifier reads version {LOCK_VERSION}. {fix}"
+        )
+    if lock.get("contentHash") != content_hash(lock):
+        return f"{path} was changed after `luarocks-purifier lock` wrote it: its contentHash does not match its content. {fix}"
+    files = [r.get("file") for r in lock.get("rockspecs", [])]
+    if not all(f and os.path.isfile(os.path.join(root(), f)) for f in files):
+        return f"{path} names a rockspec that the project does not have. {fix}"
+    if lock.get("definitionHash") != definition_hash(files, root()):
+        return f"{path} is out of date: a rockspec or luarocks.lock changed since the lock run. {fix}"
+    return None
 
 
 def find_rockspecs(given):
@@ -523,15 +572,19 @@ def rockspec_info(lua_bin, rockspec):
         "o(env.package); o(env.version); o(s.url); o(s.tag or s.cvs_tag or s.branch); o(s.dir); o(s.md5); o(s.module or s.cvs_module); "
         "local names = {}; "
         "for _, d in ipairs(env.dependencies or {}) do names[#names + 1] = d:match('^%s*([^%s<>=~]+)') end; "
-        "o(table.concat(names, ' '))"
+        "o(table.concat(names, ' ')); "
+        "o(env.test and 'yes')"
     ).replace("PATH", lua_string(os.path.abspath(rockspec)))
     out = subprocess.check_output([lua_bin, "-e", script], text=True)
-    package, version, url, ref, sdir, md5, module, deps = (out.split("\n") + [""] * 8)[:8]
+    package, version, url, ref, sdir, md5, module, deps, test = (out.split("\n") + [""] * 9)[:9]
     return {
         "file": rockspec,
         "package": package,
         "version": version,
         "dependencyNames": deps.lower().split(),
+        # Whether `luarocks test` finds a test suite: the rockspec's `test`
+        # table, or else the .busted file that LuaRocks detects busted by.
+        "tests": test == "yes" or os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(rockspec)), ".busted")),
         "source": {
             k: v
             for k, v in {
@@ -691,20 +744,17 @@ def copy_project(dest):
     shutil.copytree(root(), dest, symlinks=True, ignore=ignore)
 
 
-def cmd_lock(argv, force):
-    previous = read_lock()
-    opts = lock_options(argv, previous)
+def cmd_lock(argv):
+    # The options of an earlier lockfile, when it can be read.
+    previous = None
+    if os.path.isfile(lock_path()):
+        with open(lock_path()) as f:
+            try:
+                previous = json.load(f)
+            except json.JSONDecodeError:
+                previous = None
+    opts = lock_options(argv, previous if isinstance(previous, dict) else None)
     defn = definition_hash(opts["rockspecs"])
-    if (
-        not force
-        and previous
-        and previous.get("version") == LOCK_VERSION
-        and previous.get("definitionHash") == defn
-        and all(previous.get(k) == opts[k] for k in ("lua", "servers", "externalDeps"))
-        and [r["file"] for r in previous.get("rockspecs", [])] == opts["rockspecs"]
-    ):
-        print(f"luarocks-purifier: {LOCK_FILE} is current")
-        return 0
 
     packages = luarocks_packages()
     luarocks_pkg = packages[opts["lua"]]
@@ -863,11 +913,12 @@ def cmd_lock(argv, force):
         "downloads": sorted(downloads, key=lambda d: d["path"]),
         "checkouts": sorted(checkouts, key=lambda c: c["path"]),
     }
-    with open(os.path.join(root(), LOCK_FILE), "w") as f:
-        json.dump(lock, f, indent=2, sort_keys=True)
+    lock["contentHash"] = content_hash(lock)
+    with open(lock_path(), "w") as f:
+        json.dump(lock, f, indent=2, sort_keys=True, ensure_ascii=False)
         f.write("\n")
     shutil.rmtree(state)
-    print(f"luarocks-purifier: wrote {LOCK_FILE} ({len(downloads)} downloads)", file=sys.stderr)
+    print(f"luarocks-purifier: wrote {lock_path()} ({len(downloads)} downloads)", file=sys.stderr)
     return 0
 
 
@@ -875,7 +926,7 @@ def nix_lib(name):
     return os.path.join(os.environ["LUAROCKS_PURIFIER_LIB"], name)
 
 
-def realize(lock_path):
+def realize():
     out_link = os.path.join(root(), STATE_DIR, "cache")
     os.makedirs(os.path.dirname(out_link), exist_ok=True)
     status = subprocess.call(
@@ -884,7 +935,7 @@ def realize(lock_path):
             nix_lib("realize.nix"),
             "--arg",
             "lockFile",
-            lock_path,
+            os.path.abspath(lock_path()),
             "--arg",
             "nixpkgs",
             os.environ["LUAROCKS_PURIFIER_NIXPKGS"],
@@ -898,29 +949,28 @@ def realize(lock_path):
     )
     if status != 0:
         fail(
-            f"Nix could not fetch what {LOCK_FILE} names (its error is above). "
-            "A hash mismatch means that the lockfile was edited or that a server changed a file it serves; "
-            "run `luarocks-purifier relock` to lock again."
+            f"Nix could not fetch what {lock_path()} names (its error is above). "
+            "A hash mismatch means that a server changed a file it serves; "
+            "run `luarocks-purifier lock` to lock again."
         )
     return os.path.realpath(out_link)
 
 
-def cmd_luarocks(argv):
+# The lockfile, when it is current for the project; otherwise the command
+# stops with the message that names `luarocks-purifier lock`.
+def current_lock():
     lock = read_lock()
-    packages = luarocks_packages()
-    if lock is None or lock.get("definitionHash") != definition_hash([r["file"] for r in lock.get("rockspecs", [])]):
-        reason = "there is no lockfile" if lock is None else f"{LOCK_FILE} is out of date"
-        print(
-            f"luarocks-purifier: {reason}; running luarocks with network access. "
-            "Run `luarocks-purifier lock` to lock the project.",
-            file=sys.stderr,
-        )
-        luarocks_pkg = packages[(lock or {}).get("lua", DEFAULT_LUA)]
-        env = dict(os.environ)
-        env["LUA_INIT"] = "@" + nix_lib("tmpname.lua")
-        os.execve(os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks"), ["luarocks"] + argv, env)
-    luarocks_pkg = packages[lock["lua"]]
-    cache = realize(os.path.join(root(), LOCK_FILE))
+    problem = lock_problem(lock)
+    if problem:
+        fail(problem)
+    return lock
+
+
+# Runs luarocks offline on the locked files, with lua_modules as the tree,
+# and returns its exit status.
+def run_offline(lock, argv):
+    luarocks_pkg = luarocks_packages()[lock["lua"]]
+    cache = realize()
     state = os.path.join(root(), STATE_DIR)
     for d in ("home", "tmp", "local-cache"):
         os.makedirs(os.path.join(state, d), exist_ok=True)
@@ -954,36 +1004,67 @@ def cmd_luarocks(argv):
     return status
 
 
+def cmd_luarocks(argv):
+    return run_offline(current_lock(), argv)
+
+
+# Everything day-to-day work needs, so that it works with the network cut
+# off: the offline cache of the lockfile (realize keeps it with the GC root
+# .luarocks-purifier/cache), this command with its LuaRocks, Lua, compiler
+# and nixpkgs (the GC root .luarocks-purifier/tools), and the dependencies
+# and test dependencies of every rockspec, installed into lua_modules, where
+# the editor finds them.
+def cmd_prefetch(argv):
+    if argv:
+        fail("prefetch takes no arguments")
+    lock = current_lock()
+    tools = os.path.join(root(), STATE_DIR, "tools")
+    if subprocess.call(
+        ["nix-store", "--realise", os.environ["LUAROCKS_PURIFIER_PACKAGE"], "--add-root", tools],
+        stdout=subprocess.DEVNULL,
+    ):
+        fail("nix-store could not add the GC root of luarocks-purifier itself (its error is above)")
+    for info in lock["rockspecs"]:
+        steps = [["make", "--deps-only", info["file"]]]
+        if info["tests"]:
+            steps.append(["test", "--prepare", info["file"]])
+        for step in steps:
+            status = run_offline(lock, step)
+            if status != 0:
+                return status
+    print(
+        f"luarocks-purifier: prefetched {lock_path()}; the dependencies are in lua_modules",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def cmd_publish(argv):
     if not argv:
         fail("usage: luarocks-purifier publish ROCKSPEC [UPLOAD-ARGS...]")
     rockspec, upload_args = argv[0], argv[1:]
-    lock = read_lock()
-    if lock is None:
-        fail(f"no {LOCK_FILE}; run `luarocks-purifier lock` first")
+    lock = current_lock()
     info = next((r for r in lock["rockspecs"] if r["file"] == rockspec), None)
     if info is None:
-        fail(f"{rockspec} is not one of the rockspecs in {LOCK_FILE}")
-    if lock.get("definitionHash") != definition_hash([r["file"] for r in lock["rockspecs"]]):
-        fail(f"{LOCK_FILE} is out of date; run `luarocks-purifier lock` first")
-    rock = nix_build(
+        fail(f"{rockspec} is not one of the rockspecs in {lock_path()}")
+    release = nix_build(
         [
-            nix_lib("source-rock.nix"),
+            nix_lib("release.nix"),
             "--arg",
             "src",
             root(),
             "--arg",
+            "lockFile",
+            os.path.abspath(lock_path()),
+            "--arg",
             "nixpkgs",
             os.environ["LUAROCKS_PURIFIER_NIXPKGS"],
-            "--argstr",
-            "rockspec",
-            rockspec,
             "--argstr",
             "purifierFlake",
             os.environ["LUAROCKS_PURIFIER_LIBRARY"],
         ]
     )[0]
-    rock_file = os.path.join(rock, f"{info['package']}-{info['version']}.src.rock")
+    rock_file = os.path.join(release, f"{info['package']}-{info['version']}.src.rock")
     print(f"luarocks-purifier: uploading {rockspec} with {rock_file}", file=sys.stderr)
     luarocks_pkg = luarocks_packages()[lock["lua"]]
     # The user's own LuaRocks configuration with certificate checks on, which
@@ -1038,15 +1119,16 @@ def main():
         print(__doc__ or open(__file__).read().split("\n\n")[1])
         return 0
     command, rest = args[0], args[1:]
-    if command == "lock":
-        return cmd_lock(rest, force=False)
-    if command == "relock":
-        return cmd_lock(rest, force=True)
-    if command == "luarocks":
-        return cmd_luarocks(rest)
-    if command == "publish":
-        return cmd_publish(rest)
-    fail(f"unknown command {command}; the commands are lock, relock, luarocks and publish")
+    if rest[:1] == ["--lockfile"]:
+        if len(rest) < 2:
+            fail("--lockfile needs a path")
+        global lock_path_given
+        lock_path_given = os.path.abspath(rest[1])
+        rest = rest[2:]
+    commands = {"lock": cmd_lock, "prefetch": cmd_prefetch, "luarocks": cmd_luarocks, "publish": cmd_publish}
+    if command not in commands:
+        fail(f"unknown command {command}; the commands are lock, prefetch, luarocks and publish")
+    return commands[command](rest)
 
 
 if __name__ == "__main__":

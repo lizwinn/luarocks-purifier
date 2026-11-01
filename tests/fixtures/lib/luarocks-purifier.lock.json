@@ -8,6 +8,7 @@
       "request": "https://github.com/kikito/inspect.lua.git"
     }
   ],
+  "contentHash": "sha256-ud/Tvyf+TCSDWETWBcXFHn4HuoGJsLaqrJcFTGqe2gk=",
   "definitionHash": "sha256-flzI4uZsaziVI6hcQWiT2gVItcdWA1GA6R/brCUkilk=",
   "downloads": [
     {
@@ -62,6 +63,7 @@
         "dir": "lib-1.0",
         "url": "https://example.org/releases/lib-1.0.tar.gz"
       },
+      "tests": false,
       "version": "1.0-1"
     },
     {
@@ -85,6 +87,7 @@
         "url": "https://github.com/luarocks/argparse/archive/0.7.1.zip"
       },
       "sourceArchive": "files/fd26d0877d80fa7a/0.7.1.zip",
+      "tests": false,
       "version": "1.0-1"
     }
   ],
@@ -98,5 +101,5 @@
       "https://loadk.com/luarocks"
     ]
   ],
-  "version": 2
+  "version": 3
 }

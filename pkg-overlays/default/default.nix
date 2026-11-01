@@ -1,17 +1,13 @@
 # SPDX-License-Identifier: MIT
 #
 # The default package overlay. It adds the packages of pkgs/ under
-# `pkgs.luarocks-purifier` (`.cli`, `.shims`), and the builder
-# `pkgs.buildLuarocksProject` (nix/lib/build-luarocks-project.nix) beside
-# them, where nixpkgs keeps its own builders, so a package written for
-# callPackage takes it by name. A consumer that lists this flake in
-# `projects` holds it as `luarocks-purifier/default`, which its package
-# sets apply by default.
+# `pkgs.luarocks-purifier` (`.cli`, `.shims`). A consumer that lists this
+# flake in `projects` holds it as `luarocks-purifier/default`, which its
+# package sets apply by default.
 #
-# The builder fetches with the shared nix-purifiers library
-# (github:nix-purifiers/purifier), from `lib.purifier`. The CLI loads the
-# same library in its own Nix builds, from the locked source of this flake's
-# `purifier` input.
+# The CLI loads the shared nix-purifiers library
+# (github:nix-purifiers/purifier) in its own Nix builds, from the locked
+# source of this flake's `purifier` input.
 { closure-inputs, closure-lib, ... }:
 let
   packages = closure-lib.caisson.nixpkgs.mkPackagesOverlay ../../pkgs "luarocks-purifier";
@@ -28,10 +24,6 @@ in
     // {
       luarocks-purifier = base.luarocks-purifier // {
         cli = base.luarocks-purifier.cli.override { inherit purifierFlake; };
-      };
-      buildLuarocksProject = final.callPackage ../../nix/lib/build-luarocks-project.nix {
-        luarocks-purifier-shims = final.luarocks-purifier.shims;
-        inherit (closure-lib) purifier;
       };
     };
 }

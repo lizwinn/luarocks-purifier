@@ -69,6 +69,7 @@ stdenvNoCC.mkDerivation {
       --set LUAROCKS_PURIFIER_NIXPKGS ${path} \
       --set LUAROCKS_PURIFIER_SHIMS ${shims}/bin \
       --set LUAROCKS_PURIFIER_LIBRARY ${lib.escapeShellArg purifierFlake} \
+      --set LUAROCKS_PURIFIER_PACKAGE "$out" \
       --set LUAROCKS_PURIFIER_LUAROCKS ${lib.escapeShellArg (builtins.toJSON luarocks)} \
       --suffix PATH : ${
         lib.makeBinPath [

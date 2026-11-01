@@ -1,91 +1,150 @@
 # SPDX-License-Identifier: MIT
 #
-# The flake's checks: the CLI, and the sandboxed builds of the fixtures
-# under tests/fixtures from their committed lockfiles, each with a run of
-# what it built.
+# The flake's checks: the CLI, the conformance checks of the purifier
+# contract, the sandboxed builds of the fixtures under tests/fixtures from
+# their committed lockfiles, each with a run of what it built, and the
+# real-world project luacheck.
 {
   pkgs,
-  overlay,
+  # lib.luarocks-purifier.buildLuarocksProject of this flake.
+  buildLuarocksProject,
   cli,
+  # The source of luacheck v1.2.0, a flake input of the check partition.
+  luacheck,
 }:
 let
-  p = pkgs.extend overlay;
+  inherit (pkgs) lib;
+  build = args: buildLuarocksProject ({ inherit pkgs; } // args);
+  contentHash = import ../nix/lib/content-hash.nix;
 
   # app: a rock with a command, Lua modules, a C dependency (lpeg), a git
   # dependency that links a C library from nixpkgs (lua-zlib with zlib), a
   # zip archive (argparse), a GitHub archive (inspect) and a test suite
   # with a test dependency (luaunit).
-  app =
-    (p.buildLuarocksProject {
-      src = ./fixtures/app;
-      doCheck = true;
-    }).packages.app;
+  appProject = build { src = ./fixtures/app; };
+  app = appProject.packages.app;
   # lib: a LuaJIT project with two rockspecs, where lib-demo depends on
   # lib, a local rocks server (rocks/) with a git source of rockspec format
   # 3.0 (so with submodules), and the two kinds of own source a source rock
   # holds: a release archive that does not exist yet (lib), which the
   # project source stands in for, and an archive pinned by md5 (lib-demo),
   # which the lock holds.
-  lib = p.buildLuarocksProject { src = ./fixtures/lib; };
-
+  libProject = build { src = ./fixtures/lib; };
   # vcs: dependencies from Mercurial, Subversion and CVS. Its lockfile is
   # written by hand, and the checkouts come from tests/vcs-checkouts in
   # place of the fetchers, so the check covers how LuaRocks gets each kind
   # of checkout offline. tests/interactive.sh covers how the lock run
   # records them, against local repositories.
+  vcs =
+    (build {
+      src = ./fixtures/vcs;
+      fetchers = {
+        fetchhg = _: ./vcs-checkouts/hgrock;
+        fetchsvn = _: ./vcs-checkouts/svnrock;
+        fetchcvs = _: ./vcs-checkouts/cvsrock;
+      };
+    }).packages.vcs;
+
   # Lockfiles that the builder must reject, each made from the app
-  # fixture's lockfile at evaluation time.
+  # fixture's lockfile at evaluation time. `withHash` gives a changed
+  # lockfile the content hash that `luarocks-purifier lock` would write, so
+  # that the check reaches the problem it is about.
   appLock = builtins.fromJSON (builtins.readFile ./fixtures/app/luarocks-purifier.lock.json);
+  withHash = lock: lock // { contentHash = contentHash lock; };
   appWith =
     lock:
-    p.buildLuarocksProject {
+    build {
       src = ./fixtures/app;
       lockFile = builtins.toFile "luarocks-purifier.lock.json" (builtins.toJSON lock);
     };
-  # Evaluating the rock fails, with the message `luarocks-purifier relock`.
+  # Evaluating the rock fails, and the message names `luarocks-purifier
+  # lock` (nix/lib/lock-problem.nix gives the message that lock.nix throws).
   rejects =
     name: lock:
-    assert
+    let
+      problem = import ../nix/lib/lock-problem.nix {
+        parsed = lock;
+        name = "the ${name} lockfile";
+        src = ./fixtures/app;
+      };
+    in
+    assert lib.assertMsg (problem != null) "the ${name} lockfile has no problem";
+    assert lib.assertMsg (lib.hasInfix "`luarocks-purifier lock`" problem)
+      "the message for the ${name} lockfile does not name `luarocks-purifier lock`: ${problem}";
+    assert lib.assertMsg (
       !(builtins.tryEval (appWith lock).packages.app.drvPath).success
-      || throw "the builder accepted the ${name} lockfile";
-    p.runCommand "rejects-${name}" { } "touch $out";
-
-  vcs =
-    (p.buildLuarocksProject {
-      src = ./fixtures/vcs;
-      fetchhg = _: ./vcs-checkouts/hgrock;
-      fetchsvn = _: ./vcs-checkouts/svnrock;
-      fetchcvs = _: ./vcs-checkouts/cvsrock;
-    }).packages.vcs;
+    ) "the builder accepted the ${name} lockfile";
+    pkgs.runCommand "conformance-${name}" { } ''
+      echo ${lib.escapeShellArg problem}
+      touch $out
+    '';
 in
 {
   inherit cli;
 
   # A lockfile made from other rockspecs than the source holds.
-  rejects-stale = rejects "stale" (
-    appLock // { definitionHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; }
+  conformance-stale = rejects "stale" (
+    withHash (appLock // { definitionHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; })
   );
-  # A lockfile without the fields the builder reads.
-  rejects-malformed = rejects "malformed" { version = 1; };
-  # A lockfile of another format version.
-  rejects-old-format = rejects "old-format" (appLock // { version = 0; });
+  # A lockfile with a download hash changed by hand.
+  conformance-tampered = rejects "tampered" (
+    appLock
+    // {
+      downloads = map (
+        d: if d.path == "server/lpeg-1.1.0-2.src.rock" then d // { hash = lib.fakeHash; } else d
+      ) appLock.downloads;
+    }
+  );
+  # Lockfiles that are not valid: one without the fields the builder reads,
+  # and one of another format version.
+  conformance-malformed =
+    pkgs.runCommand "conformance-malformed"
+      {
+        checks = [
+          (rejects "malformed" { version = 3; })
+          (rejects "old-format" (withHash (appLock // { version = 0; })))
+        ];
+      }
+      ''
+        touch $out
+      '';
 
   # A lockfile that lacks a download (lpeg's source rock): the build fails
   # offline and says to run `luarocks-purifier lock`.
-  rejects-missing-entry =
+  conformance-missing =
     let
-      lock = appLock // {
-        downloads = builtins.filter (d: (d.path or "") != "server/lpeg-1.1.0-2.src.rock") appLock.downloads;
-      };
-      failure = p.testers.testBuildFailure (appWith lock).packages.app;
+      lock = withHash (
+        appLock
+        // {
+          downloads = builtins.filter (d: d.path != "server/lpeg-1.1.0-2.src.rock") appLock.downloads;
+        }
+      );
+      failure = pkgs.testers.testBuildFailure (appWith lock).packages.app;
     in
-    p.runCommand "rejects-missing-entry" { } ''
+    pkgs.runCommand "conformance-missing" { } ''
       grep -q 'run `luarocks-purifier lock`' ${failure}/testBuildFailure.log
       touch $out
     '';
 
+  # The app fixture built from a lockfile kept outside its source, which
+  # holds no luarocks-purifier lockfile.
+  conformance-external =
+    let
+      external = build {
+        src = lib.fileset.toSource {
+          root = ./fixtures/app;
+          fileset = lib.fileset.difference ./fixtures/app ./fixtures/app/luarocks-purifier.lock.json;
+        };
+        lockFile = ./fixtures/app/luarocks-purifier.lock.json;
+      };
+    in
+    pkgs.runCommand "conformance-external" { } ''
+      ${external.packages.app.bin.app} "a b a" | grep -q 'a = 2'
+      touch $out
+    '';
+
   # The unit tests of bin/luarocks-purifier (tests/test_cli.py).
-  unit = p.runCommand "luarocks-purifier-unit-tests" { nativeBuildInputs = [ p.python3 ]; } ''
+  unit = pkgs.runCommand "luarocks-purifier-unit-tests" { nativeBuildInputs = [ pkgs.python3 ]; } ''
     cp -r ${../bin} bin
     mkdir tests
     cp ${./test_cli.py} tests/test_cli.py
@@ -93,26 +152,51 @@ in
     touch $out
   '';
 
-  lib = lib.packages.lib;
-  lib-demo = lib.packages.lib-demo;
+  inherit app;
+  app-tests = appProject.tests;
 
-  lib-runs = p.runCommand "lib-runs" { } ''
-    output=$(${lib.packages.lib-demo.bin.lib-demo})
-    echo "$output"
-    echo "$output" | grep -q 'LuaJIT'
-    test -f ${lib.packages.lib.modules.lib}
+  # The command the rock installs runs, with its modules and the C modules
+  # of its dependencies, and the outputs the lockfile names are where the
+  # attributes say. `nix build` reads a package's `outputs` as the list of
+  # its derivation outputs, so the builder's attributes must leave it be.
+  app-runs =
+    assert lib.assertMsg (
+      app.outputs == [ "out" ]
+    ) "the app package's outputs attribute is not [ \"out\" ]";
+    pkgs.runCommand "app-runs" { } ''
+      output=$(${app.bin.app} "the cat and The hat")
+      echo "$output"
+      echo "$output" | grep -q 'the = 2'
+      test -f ${app.modules.app}
+      test -f ${app.modules."app.words"}
+      touch $out
+    '';
+
+  # The release holds the source rock, which holds the rockspec and the
+  # project source, which stands in for the git tag the rockspec names.
+  app-release = pkgs.runCommand "app-release" { nativeBuildInputs = [ pkgs.unzip ]; } ''
+    unzip -l ${appProject.release}/app-0.1-1.src.rock | tee listing
+    grep -q 'app-0.1-1.rockspec' listing
+    grep -q 'src/app/words.lua' listing
     touch $out
   '';
+
+  # `fetches` lists the download entries of the lockfile.
+  app-fetches =
+    assert lib.assertMsg (
+      appProject.fetches == appLock.downloads
+    ) "fetches is not the downloads of the lockfile";
+    pkgs.runCommand "app-fetches" { } "touch $out";
 
   # `luarocks upload`, as `luarocks-purifier publish` runs it, sends the
   # rockspec and the source rock Nix packed, byte for byte, to a stand-in
   # for the luarocks.org upload API.
   app-publish =
-    p.runCommand "app-publish"
+    pkgs.runCommand "app-publish"
       {
         nativeBuildInputs = [
-          p.python3
-          p.curl
+          pkgs.python3
+          pkgs.curl
           app.luarocks
         ];
       }
@@ -123,14 +207,34 @@ in
         while [ ! -f $TMPDIR/port ]; do sleep 0.1; done
         cp -r ${./fixtures/app} src
         cd src
-        luarocks upload app-0.1-1.rockspec ${app.rock}/app-0.1-1.src.rock \
+        luarocks upload app-0.1-1.rockspec ${appProject.release}/app-0.1-1.src.rock \
           --server "http://127.0.0.1:$(cat $TMPDIR/port)" --api-key test
         cmp $TMPDIR/uploads/app-0.1-1.rockspec app-0.1-1.rockspec
-        cmp $TMPDIR/uploads/app-0.1-1.src.rock ${app.rock}/app-0.1-1.src.rock
+        cmp $TMPDIR/uploads/app-0.1-1.src.rock ${appProject.release}/app-0.1-1.src.rock
         touch $out
       '';
 
-  vcs-runs = p.runCommand "vcs-runs" { } ''
+  lib = libProject.packages.lib;
+  lib-demo = libProject.packages.lib-demo;
+
+  lib-runs = pkgs.runCommand "lib-runs" { } ''
+    output=$(${libProject.packages.lib-demo.bin.lib-demo})
+    echo "$output"
+    echo "$output" | grep -q 'LuaJIT'
+    test -f ${libProject.packages.lib.modules.lib}
+    touch $out
+  '';
+
+  lib-release = pkgs.runCommand "lib-release" { nativeBuildInputs = [ pkgs.unzip ]; } ''
+    unzip -l ${libProject.release}/lib-1.0-1.src.rock | tee lib
+    grep -q 'lib-1.0.tar.gz' lib
+    unzip -p ${libProject.release}/lib-1.0-1.src.rock lib-1.0.tar.gz | tar -tzf - | grep -q 'lib-1.0/src/lib.lua'
+    unzip -l ${libProject.release}/lib-demo-1.0-1.src.rock | tee demo
+    grep -q '0.7.1.zip' demo
+    touch $out
+  '';
+
+  vcs-runs = pkgs.runCommand "vcs-runs" { } ''
     LUA_PATH='${vcs}/share/lua/5.4/?.lua' ${vcs.lua}/bin/lua -e '
       local s = require("vcs").sources
       assert(s[1] == "mercurial" and s[2] == "subversion" and s[3] == "cvs")
@@ -138,40 +242,21 @@ in
     touch $out
   '';
 
-  lib-rocks = p.runCommand "lib-rocks" { nativeBuildInputs = [ p.unzip ]; } ''
-    unzip -l ${lib.packages.lib.rock}/lib-1.0-1.src.rock | tee lib
-    grep -q 'lib-1.0.tar.gz' lib
-    unzip -p ${lib.packages.lib.rock}/lib-1.0-1.src.rock lib-1.0.tar.gz | tar -tzf - | grep -q 'lib-1.0/src/lib.lua'
-    unzip -l ${lib.packages.lib-demo.rock}/lib-demo-1.0-1.src.rock | tee demo
-    grep -q '0.7.1.zip' demo
-    touch $out
-  '';
-
-  app = app;
-
-  # The command the rock installs runs, with its modules and the C modules
-  # of its dependencies, and the outputs the lockfile names are where the
-  # attributes say. `nix build` reads a package's `outputs` as the list of
-  # its derivation outputs, so the builder's attributes must leave it be.
-  app-runs =
-    assert pkgs.lib.assertMsg (
-      app.outputs == [ "out" ]
-    ) "the app package's outputs attribute is not [ \"out\" ]";
-    p.runCommand "app-runs" { } ''
-      output=$(${app.bin.app} "the cat and The hat")
-      echo "$output"
-      echo "$output" | grep -q 'the = 2'
-      test -f ${app.modules.app}
-      test -f ${app.modules."app.words"}
+  # luacheck v1.2.0, unchanged, from the lockfile in tests/real/luacheck,
+  # checks its own source and finds nothing.
+  real-luacheck =
+    let
+      luacheckPackage =
+        (build {
+          src = luacheck;
+          lockFile = ./real/luacheck/luarocks-purifier.lock.json;
+        }).packages.luacheck;
+    in
+    pkgs.runCommand "real-luacheck" { } ''
+      ${luacheckPackage.bin.luacheck} --version | grep -q 'Luacheck: 1.2.0'
+      cd ${luacheck}
+      ${luacheckPackage.bin.luacheck} --no-cache --no-color src | tee $TMPDIR/report
+      grep -q '0 warnings / 0 errors' $TMPDIR/report
       touch $out
     '';
-
-  # The source rock holds the rockspec and the project source, which stands
-  # in for the git tag the rockspec names.
-  app-rock = p.runCommand "app-rock" { nativeBuildInputs = [ p.unzip ]; } ''
-    unzip -l ${app.rock}/app-0.1-1.src.rock | tee listing
-    grep -q 'app-0.1-1.rockspec' listing
-    grep -q 'src/app/words.lua' listing
-    touch $out
-  '';
 }

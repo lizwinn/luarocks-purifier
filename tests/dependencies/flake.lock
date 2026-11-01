@@ -76,6 +76,23 @@
         "type": "github"
       }
     },
+    "luacheck": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1716539549,
+        "narHash": "sha256-6aDXZRLq2c36dbasyVzcecQKoMvY81RIGYasdF211UY=",
+        "owner": "lunarmodules",
+        "repo": "luacheck",
+        "rev": "cc089e3f65acdd1ef8716cc73a3eca24a6b845e4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "lunarmodules",
+        "repo": "luacheck",
+        "rev": "cc089e3f65acdd1ef8716cc73a3eca24a6b845e4",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1793341285,
@@ -111,6 +128,7 @@
       "inputs": {
         "caisson": "caisson",
         "flake-parts": "flake-parts_2",
+        "luacheck": "luacheck",
         "nixpkgs": "nixpkgs",
         "treefmt-nix": "treefmt-nix"
       }

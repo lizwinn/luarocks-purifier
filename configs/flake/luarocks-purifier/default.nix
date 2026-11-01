@@ -57,8 +57,9 @@
           {
             checks = import ../../../tests {
               inherit pkgs;
-              overlay = self.overlays.default;
+              inherit (self.lib.luarocks-purifier) buildLuarocksProject;
               inherit (self.packages.${system}) cli;
+              luacheck = inputs.luacheck;
             };
             treefmt.programs.nixfmt.enable = true;
           };
