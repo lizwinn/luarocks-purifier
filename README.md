@@ -25,7 +25,10 @@ empty cache, and records what LuaRocks fetches: rockspecs and rocks from
 the rocks servers, the source archives the rockspecs name, and git,
 Mercurial, Subversion and CVS checkouts. It records them by URL and
 SHA-256, with the commands, Lua modules and C modules each rock installs.
-Its options are saved in the lockfile, and a later `lock` reuses them:
+LuaRocks' own lockfile, `luarocks.lock`, pins versions and records no URLs
+or hashes, so luarocks-purifier writes `luarocks-purifier.lock.json` for the
+downloads, and it reads `luarocks.lock` when the project has one. Its
+options are saved in the lockfile, and a later `lock` reuses them:
 
 | Option | Meaning |
 |---|---|
@@ -96,7 +99,9 @@ shared purifier library.
 
 ## Development loop
 
-The development loop is LuaRocks' own commands, run on the locked files:
+LuaRocks has no plugin mechanism, so luarocks-purifier is a command that
+runs LuaRocks itself, with the locked files in place of the network. The
+development loop is LuaRocks' own commands, run on the locked files:
 
 ```zsh
 nix run github:nix-purifiers/luarocks-purifier -- luarocks make
@@ -115,9 +120,12 @@ To add a dependency, change the rockspec and lock again:
 nix run github:nix-purifiers/luarocks-purifier -- lock
 ```
 
-`lock` keeps the versions that `luarocks.lock` pins. To move to newer
-versions, run `update`, with the names of the rocks to move or with none to
-move them all:
+`lock` keeps the versions that `luarocks.lock` pins. A project often has no
+`luarocks.lock`. Then `lock` resolves the newest versions the rockspecs
+allow and records them in `luarocks-purifier.lock.json`, and it leaves the
+project's files alone. To pin versions in `luarocks.lock`, or to move to
+newer versions, run `update`, with the names of the rocks to move or with
+none to move them all:
 
 ```zsh
 nix run github:nix-purifiers/luarocks-purifier -- update argparse
@@ -142,7 +150,9 @@ nix run github:nix-purifiers/luarocks-purifier -- prefetch
 ```
 
 realizes everything the development loop needs in the Nix store and keeps
-it with two garbage-collector roots in `.luarocks-purifier/`. `cache` holds
+it with two garbage-collector roots in `.luarocks-purifier/`. That
+directory lies in the project root, also when the lockfile is kept
+elsewhere. `cache` holds
 the locked files and C libraries, and `tools` holds luarocks-purifier with
 its LuaRocks, Lua, C compiler and nixpkgs. `prefetch` also installs the
 dependencies and test dependencies of every rockspec into `lua_modules`.
@@ -164,6 +174,9 @@ project root sets its library path:
 ```
 
 For LuaJIT and Lua 5.1, the directory is `lua_modules/share/lua/5.1`.
+
+`prefetch` realizes the rocks, and the language server comes from your own
+editor setup, such as the nixpkgs package `lua-language-server`.
 
 ## Troubleshooting
 
