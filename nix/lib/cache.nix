@@ -45,17 +45,19 @@
 }:
 let
   lock = import ./lock.nix {
-    inherit lockFile luarocksLock;
+    inherit lockFile luarocksLock purifier;
     src = projectSource;
   };
   fetch = purifier.fetchEntry ({ inherit pkgs; } // fetchers);
   luarocks = (import ./lua.nix { inherit pkgs; }).${lock.lua}.pkgs.luarocks;
 
+  # The downloads of the lock in memory for this system, which are all of
+  # them: every rock the lock run locks is platform-neutral.
   fetched = builtins.listToAttrs (
     map (d: {
       name = d.path;
       value = fetch d;
-    }) lock.downloads
+    }) (purifier.entriesFor pkgs.stdenv.hostPlatform.system lock.inMemory)
   );
 
   files = builtins.listToAttrs (

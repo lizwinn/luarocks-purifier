@@ -57,7 +57,7 @@
           {
             checks = import ../../../tests {
               inherit pkgs;
-              inherit (self.lib.luarocks-purifier) buildLuarocksProject;
+              inherit (self.lib.luarocks-purifier) buildLuarocksProject readLock;
               inherit (self.packages.${system}) cli;
               luacheck = inputs.luacheck;
             };

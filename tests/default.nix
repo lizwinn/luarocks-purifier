@@ -6,8 +6,9 @@
 # real-world project luacheck.
 {
   pkgs,
-  # lib.luarocks-purifier.buildLuarocksProject of this flake.
+  # lib.luarocks-purifier.buildLuarocksProject and readLock of this flake.
   buildLuarocksProject,
+  readLock,
   cli,
   # The source of luacheck v1.2.0, a flake input of the check partition.
   luacheck,
@@ -57,18 +58,20 @@ let
       src = ./fixtures/app;
       lockFile = builtins.toFile "luarocks-purifier.lock.json" (builtins.toJSON lock);
     };
-  # Evaluating the rock fails, and the message names `luarocks-purifier
-  # lock` (nix/lib/lock-problem.nix gives the message that lock.nix throws).
+  # The lock in memory holds one problem, whose message names
+  # `luarocks-purifier lock`, and evaluating the rock fails.
   rejects =
     name: lock:
     let
-      problem = import ../nix/lib/lock-problem.nix {
-        parsed = lock;
-        name = "the ${name} lockfile";
+      inMemory = readLock {
         src = ./fixtures/app;
+        lockFile = builtins.toFile "luarocks-purifier.lock.json" (builtins.toJSON lock);
       };
+      problem = builtins.head inMemory.problems;
     in
-    assert lib.assertMsg (problem != null) "the ${name} lockfile has no problem";
+    assert lib.assertMsg (
+      builtins.length inMemory.problems == 1
+    ) "the ${name} lockfile does not have one problem";
     assert lib.assertMsg (lib.hasInfix "`luarocks-purifier lock`" problem)
       "the message for the ${name} lockfile does not name `luarocks-purifier lock`: ${problem}";
     assert lib.assertMsg (
@@ -181,12 +184,24 @@ in
     touch $out
   '';
 
-  # `fetches` lists the download entries of the lockfile.
-  app-fetches =
+  # The lock in memory of the app fixture has no problems, its entries are
+  # the downloads of the lockfile, and `fetches` is those entries.
+  app-lock-in-memory =
+    let
+      inMemory = readLock { src = ./fixtures/app; };
+    in
+    assert lib.assertMsg (inMemory.problems == [ ]) "the app lock has problems";
+    assert lib.assertMsg (inMemory.purifier == "luarocks-purifier") "purifier is not luarocks-purifier";
     assert lib.assertMsg (
-      appProject.fetches == appLock.downloads
-    ) "fetches is not the downloads of the lockfile";
-    pkgs.runCommand "app-fetches" { } "touch $out";
+      inMemory.entries == appLock.downloads
+    ) "entries is not the downloads of the lockfile";
+    assert lib.assertMsg (
+      inMemory.outputs.app.bin == [ "app" ]
+    ) "the outputs of app do not list its command";
+    assert lib.assertMsg (
+      appProject.fetches == inMemory.entries
+    ) "fetches is not the entries of the lock";
+    pkgs.runCommand "app-lock-in-memory" { } "touch $out";
 
   # `luarocks upload`, as `luarocks-purifier publish` runs it, sends the
   # rockspec and the source rock Nix packed, byte for byte, to a stand-in

@@ -6,6 +6,9 @@
 #
 #   conformance-relock   the lock run of each fixture reproduces its
 #                        committed lockfile byte for byte
+#   conformance-update   `update` of a rock that luarocks.lock pins to an old
+#                        version moves both lockfiles, which then pass the
+#                        stale check
 #   conformance-rebuild  `nix build --rebuild` of the app fixture gives the
 #                        same output
 #   conformance-offline  after `luarocks-purifier prefetch`, the everyday
@@ -81,6 +84,42 @@ conformance-relock() {
   done
 }
 
+conformance-update() {
+  step "update a pinned old version"
+  fixture app update
+  cd "$work/update"
+  # argparse may be any version from 0.7.1, and luarocks.lock pins the
+  # older of the two that luarocks.org serves for Lua 5.4.
+  sed -i 's/"argparse == 0.7.1"/"argparse >= 0.7.1"/' app-0.1-1.rockspec
+  cat > luarocks.lock <<'EOF'
+return {
+   dependencies = {
+      ["argparse"] = "0.7.1-1",
+   },
+}
+EOF
+  # `lock` keeps the pin.
+  "$cli" lock
+  grep -q '"server/argparse-0.7.1-1.src.rock"' luarocks-purifier.lock.json
+  # `update argparse` resolves it again, and both lockfiles move.
+  "$cli" update argparse
+  grep -q '"argparse"\] = "0.7.2-1"' luarocks.lock
+  grep -q '"server/argparse-0.7.2-1.src.rock"' luarocks-purifier.lock.json
+  if grep -q 'argparse-0.7.1-1' luarocks-purifier.lock.json; then
+    echo "the lockfile still holds argparse 0.7.1-1"
+    exit 1
+  fi
+  # Both lockfiles pass the stale check, in the command and at evaluation.
+  "$cli" luarocks --version > /dev/null
+  nix eval --impure --expr "
+    let
+      flake = builtins.getFlake \"path:$repo\";
+      inMemory = flake.lib.luarocks-purifier.readLock { src = $work/update; };
+    in
+    assert inMemory.problems == [ ]; true" > /dev/null
+  cd "$repo"
+}
+
 conformance-rebuild() {
   step "rebuild app"
   nix build --no-link "$repo#checks.$system.app"
@@ -109,9 +148,12 @@ interactive() {
   (
     cd "$work/app"
     "$cli" luarocks make 2>&1 | tee make.log
-    grep -q 'luarocks-purifier-cache/server' make.log
-    if grep -q 'https://luarocks.org' make.log; then
-      echo "the interactive make reached luarocks.org"
+    # LuaRocks names each rock it installs. Nix may fetch the locked files
+    # from luarocks.org while it builds the offline cache, but LuaRocks
+    # installs every rock from that cache.
+    grep -q 'Installing .*luarocks-purifier-cache/server' make.log
+    if grep 'Installing ' make.log | grep -qv 'luarocks-purifier-cache/server'; then
+      echo "the interactive make installed a rock from outside the offline cache"
       exit 1
     fi
     # The C module records where its C library is, whichever compiler built
@@ -272,7 +314,8 @@ kinds = {k for d in lock["downloads"] for k in ("hg", "svn", "cvs") if k in d}
 assert kinds == expected, kinds
 for d in lock["downloads"]:
     assert d["hash"].startswith("sha256-"), d
-assert {c["kind"] for c in lock["checkouts"]} == expected
+by_path = {d["path"]: d for d in lock["downloads"]}
+assert {k for c in lock["checkouts"] for k in ("hg", "svn", "cvs") if k in by_path[c["path"]]} == expected
 print("recorded", sorted(kinds))
 EOF
   )
@@ -352,7 +395,7 @@ EOF
 
 sections=("$@")
 if [ ${#sections[@]} -eq 0 ]; then
-  sections=(conformance-relock conformance-rebuild conformance-offline interactive vcs publish real-luacheck)
+  sections=(conformance-relock conformance-update conformance-rebuild conformance-offline interactive vcs publish real-luacheck)
 fi
 for section in "${sections[@]}"; do
   "$section"

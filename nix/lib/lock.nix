@@ -1,20 +1,25 @@
 # SPDX-License-Identifier: MIT
 #
-# Reads a luarocks-purifier lockfile (written by `luarocks-purifier lock`).
-# It throws the message of lock-problem.nix for a lockfile that is not
-# valid, was changed by hand, or, given the project source, is out of date.
+# Reads a luarocks-purifier lockfile (written by `luarocks-purifier lock`)
+# for the builder and the offline cache. The lock in memory (read-lock.nix)
+# goes through `checkLock` of the shared purifier library, which throws the
+# problems of a lockfile that is not valid, was changed by hand, or, given
+# the project source, is out of date. The result is the lockfile with
+# helpers, and `inMemory`, the lock in memory.
 {
+  # The `purifier` namespace of the shared nix-purifiers library.
+  purifier,
   lockFile,
   src ? null,
   luarocksLock ? null,
 }:
 let
-  parsed = builtins.fromJSON (builtins.readFile lockFile);
-  problem = import ./lock-problem.nix {
-    inherit parsed src luarocksLock;
-    name = toString lockFile;
-  };
-  lock = if problem != null then throw problem else parsed;
+  inMemory = purifier.checkLock (
+    import ./read-lock.nix {
+      inherit src lockFile luarocksLock;
+    }
+  );
+  lock = builtins.seq inMemory (builtins.fromJSON (builtins.readFile lockFile));
 
   # A store path name from a file name. Store path names allow
   # [A-Za-z0-9+._?=-], must not start with a dot, and are at most 211
@@ -38,7 +43,7 @@ let
 in
 lock
 // {
-  inherit storeName;
+  inherit storeName inMemory;
 
   # The fetch name of a download: the last part of its path, made a valid
   # store name.

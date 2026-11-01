@@ -80,6 +80,14 @@ The result has these attributes, each known without building:
 When a rockspec depends on another rockspec of the same project, the build
 installs that one first, from the project source.
 
+`luarocks-purifier.lib.luarocks-purifier.readLock { src, lockFile ? ... }`
+reads the lockfile into the lock in memory that every purifier shares, for
+tools such as SBOM generators: `purifier`, the download `entries`, the
+`outputs` of each rock (its rockspec, version, commands and modules), and
+`problems`, which names `luarocks-purifier lock` for a lockfile that is out
+of date, changed by hand or not valid. The builder checks it with
+`checkLock` of the shared purifier library.
+
 ## Everyday loop
 
 The everyday loop is LuaRocks' own commands, run on the locked files:

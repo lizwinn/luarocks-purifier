@@ -415,5 +415,5 @@ in
     name = "release";
     paths = map rockFor lock.rockspecs;
   };
-  fetches = lock.downloads;
+  fetches = lock.inMemory.entries;
 }

@@ -4,7 +4,11 @@
 # luarocks-purifier: locks every file a LuaRocks project downloads, so that
 # Nix can build the project offline in its sandbox.
 #
-#   luarocks-purifier lock [options]     run LuaRocks and record its downloads
+#   luarocks-purifier lock [options]     run LuaRocks and record its downloads,
+#                                        keeping the pins of luarocks.lock
+#   luarocks-purifier update [ROCK...]   resolve the named rocks (or all of
+#                                        them) again, write luarocks.lock, and
+#                                        lock
 #   luarocks-purifier prefetch           realize the locked files with a GC
 #                                        root and install the dependencies
 #                                        into lua_modules, for offline work
@@ -744,7 +748,60 @@ def copy_project(dest):
     shutil.copytree(root(), dest, symlinks=True, ignore=ignore)
 
 
+# The pins of a luarocks.lock, LuaRocks' own lockfile, which `luarocks make`
+# follows when it lies beside the rockspec: a map from rock name to version.
+def read_luarocks_lock(lua_bin, path):
+    if not os.path.isfile(path):
+        return {}
+    script = (
+        "local t = dofile(PATH); "
+        "for name, version in pairs(t.dependencies or {}) do io.write(name, ' ', version, '\\n') end"
+    ).replace("PATH", lua_string(path))
+    out = subprocess.check_output([lua_bin, "-e", script], text=True)
+    return dict(line.split(" ", 1) for line in out.splitlines() if line)
+
+
+def write_luarocks_lock(path, pins):
+    lines = ["return {", "   dependencies = {"]
+    lines += [f"      [{lua_string(name)}] = {lua_string(version)}," for name, version in sorted(pins.items())]
+    lines += ["   },", "}"]
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+# The rocks installed in a LuaRocks tree, as a map from name to version.
+def installed_rocks(tree, lua):
+    rocks_dir = os.path.join(tree, "lib", "luarocks", f"rocks-{lua_abi(lua)}")
+    rocks = {}
+    for name in sorted(os.listdir(rocks_dir)) if os.path.isdir(rocks_dir) else []:
+        # The tree's manifest file lies beside the rock directories.
+        if not os.path.isdir(os.path.join(rocks_dir, name)):
+            continue
+        versions = sorted(os.listdir(os.path.join(rocks_dir, name)))
+        if versions:
+            rocks[name] = versions[-1]
+    return rocks
+
+
 def cmd_lock(argv):
+    return lock_run(argv, update=None)
+
+
+# `update [ROCK...]` resolves the named rocks again, or every rock when none
+# is named, and locks against the result. LuaRocks has no update command:
+# its resolution is luarocks.lock, which `luarocks make` follows. So the
+# lock run drops those pins from its copy of luarocks.lock, `luarocks make`
+# resolves them again within the rockspecs' constraints, and the project's
+# luarocks.lock is written from the rocks that `luarocks make` installed.
+def cmd_update(argv):
+    names = [a for a in argv if not a.startswith("--")]
+    options = [a for a in argv if a.startswith("--")]
+    if options:
+        fail(f"update takes rock names, not options ({' '.join(options)}); `luarocks-purifier lock` takes the options")
+    return lock_run([], update=names)
+
+
+def lock_run(argv, update):
     # The options of an earlier lockfile, when it can be read.
     previous = None
     if os.path.isfile(lock_path()):
@@ -754,7 +811,6 @@ def cmd_lock(argv):
             except json.JSONDecodeError:
                 previous = None
     opts = lock_options(argv, previous if isinstance(previous, dict) else None)
-    defn = definition_hash(opts["rockspecs"])
 
     packages = luarocks_packages()
     luarocks_pkg = packages[opts["lua"]]
@@ -790,6 +846,14 @@ def cmd_lock(argv):
     )
 
     infos = [rockspec_info(lua_bin, r) for r in opts["rockspecs"]]
+    own_packages = {i["package"].lower() for i in infos}
+    if update is not None:
+        pins = read_luarocks_lock(lua_bin, os.path.join(work, "luarocks.lock"))
+        kept = {n: v for n, v in pins.items() if update and n not in update}
+        if kept:
+            write_luarocks_lock(os.path.join(work, "luarocks.lock"), kept)
+        elif os.path.exists(os.path.join(work, "luarocks.lock")):
+            os.remove(os.path.join(work, "luarocks.lock"))
     for info in infos:
         rockspec = info["file"]
         print(f"luarocks-purifier: locking {rockspec}", file=sys.stderr)
@@ -798,6 +862,17 @@ def cmd_lock(argv):
         info["outputs"] = installed_outputs(
             lua_bin, os.path.join(state, "tree"), opts["lua"], info["package"], info["version"]
         )
+    if update is not None:
+        # The resolution of `luarocks make`: every rock it installed but the
+        # project's own, before the test dependencies join the tree.
+        resolved = {
+            n: v for n, v in installed_rocks(os.path.join(state, "tree"), opts["lua"]).items() if n not in own_packages
+        }
+        for path in (os.path.join(work, "luarocks.lock"), os.path.join(root(), "luarocks.lock")):
+            write_luarocks_lock(path, resolved)
+        print(f"luarocks-purifier: wrote {os.path.join(root(), 'luarocks.lock')}", file=sys.stderr)
+    for info in infos:
+        rockspec = info["file"]
         with open(os.path.join(work, rockspec)) as f:
             text = f.read()
         if re.search(r"^\s*test\s*=", text, re.M) or "test_dependencies" in text:
@@ -899,7 +974,7 @@ def cmd_lock(argv):
         "lua": opts["lua"],
         "servers": opts["servers"],
         "externalDeps": opts["externalDeps"],
-        "definitionHash": defn,
+        "definitionHash": definition_hash(opts["rockspecs"], root()),
         "rockspecs": infos,
         "downloads": sorted(downloads, key=lambda d: d["path"]),
         "checkouts": sorted(checkouts, key=lambda c: c["path"]),
@@ -1116,9 +1191,15 @@ def main():
         global lock_path_given
         lock_path_given = os.path.abspath(rest[1])
         rest = rest[2:]
-    commands = {"lock": cmd_lock, "prefetch": cmd_prefetch, "luarocks": cmd_luarocks, "publish": cmd_publish}
+    commands = {
+        "lock": cmd_lock,
+        "update": cmd_update,
+        "prefetch": cmd_prefetch,
+        "luarocks": cmd_luarocks,
+        "publish": cmd_publish,
+    }
     if command not in commands:
-        fail(f"unknown command {command}; the commands are lock, prefetch, luarocks and publish")
+        fail(f"unknown command {command}; the commands are lock, update, prefetch, luarocks and publish")
     return commands[command](rest)
 
 

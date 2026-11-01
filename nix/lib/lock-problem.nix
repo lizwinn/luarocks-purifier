@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 #
-# What is wrong with a parsed lockfile, as the message that lock.nix throws,
-# or null when nothing is. Given the project source, a lockfile that was
-# made from other rockspecs, or from another luarocks.lock, is out of date.
-# The conformance checks call this function to read the message.
+# What is wrong with a parsed lockfile, as the message that read-lock.nix
+# puts in the `problems` of the lock in memory, or null when nothing is.
+# Given the project source, a lockfile that was made from other rockspecs,
+# or from another luarocks.lock, is out of date.
 {
   parsed,
   # The name of the lockfile in messages.

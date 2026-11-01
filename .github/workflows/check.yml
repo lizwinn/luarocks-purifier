@@ -38,6 +38,7 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
         section:
           - conformance-relock
+          - conformance-update
           - conformance-rebuild
           - conformance-offline
           - interactive
