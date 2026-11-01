@@ -94,8 +94,11 @@ The builder takes these arguments besides `src`:
 | `lockFile` | The lockfile. The default is `luarocks-purifier.lock.json` in `src`. |
 | `externalDeps` | The C libraries the rocks need, as a list of packages. The default is the nixpkgs attributes the lockfile names. |
 | `doCheck` | Run `luarocks test` for each rock. The default is false. |
-| `fetchurl` | A fetcher for the locked files, called with `{ name, urls, hash }`, for credentials or other mirrors. |
-| `fetchgit`, `fetchhg`, `fetchsvn`, `fetchcvs` | The fetchers for locked checkouts, for instance a `fetchgit` with access to a private repository. |
+| `fetchurl`, `fetchgit`, `fetchhg`, `fetchsvn`, `fetchcvs` | Fetchers that replace those of nixpkgs for the locked downloads, for credentials or other mirrors, for instance a `fetchgit` with access to a private repository. Each is called with the arguments of the nixpkgs fetcher of the same name. |
+
+The lockfile's download entries have the shapes of the shared
+[purifier](https://github.com/nix-purifiers/purifier) library, which fetches
+them.
 
 ### The interactive mode
 

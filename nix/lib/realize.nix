@@ -8,5 +8,14 @@
   lockFile,
   # The nixpkgs the CLI was built with.
   nixpkgs,
+  # The shared nix-purifiers library the CLI was built with, as a flake
+  # reference to its locked source.
+  purifierFlake,
 }:
-(import nixpkgs { }).callPackage ./cache.nix { inherit lockFile; }
+let
+  pkgs = import nixpkgs { };
+in
+pkgs.callPackage ./cache.nix {
+  inherit lockFile;
+  inherit ((builtins.getFlake purifierFlake).lib) purifier;
+}

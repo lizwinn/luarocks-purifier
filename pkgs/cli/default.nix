@@ -31,6 +31,9 @@
   path,
   shims,
   version,
+  # The shared nix-purifiers library, as a flake reference to its locked
+  # source, which the default package overlay gives.
+  purifierFlake ? throw "luarocks-purifier: the CLI needs purifierFlake, which the default package overlay of this flake sets",
 }:
 let
   # The repository files the CLI reads at run time: the Nix library (with
@@ -65,6 +68,7 @@ stdenvNoCC.mkDerivation {
       --set LUAROCKS_PURIFIER_LIB ${source}/nix/lib \
       --set LUAROCKS_PURIFIER_NIXPKGS ${path} \
       --set LUAROCKS_PURIFIER_SHIMS ${shims}/bin \
+      --set LUAROCKS_PURIFIER_LIBRARY ${lib.escapeShellArg purifierFlake} \
       --set LUAROCKS_PURIFIER_LUAROCKS ${lib.escapeShellArg (builtins.toJSON luarocks)} \
       --suffix PATH : ${
         lib.makeBinPath [

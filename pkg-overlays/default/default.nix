@@ -7,17 +7,31 @@
 # callPackage takes it by name. A consumer that lists this flake in
 # `projects` holds it as `luarocks-purifier/default`, which its package
 # sets apply by default.
-{ closure-lib, ... }:
+#
+# The builder fetches with the shared nix-purifiers library
+# (github:nix-purifiers/purifier), from `lib.purifier`. The CLI loads the
+# same library in its own Nix builds, from the locked source of this flake's
+# `purifier` input.
+{ closure-inputs, closure-lib, ... }:
 let
   packages = closure-lib.caisson.nixpkgs.mkPackagesOverlay ../../pkgs "luarocks-purifier";
+  purifierInput = closure-inputs.purifier;
+  purifierFlake = "path:${purifierInput.outPath}?narHash=${purifierInput.narHash}";
 in
 {
   overlay =
     final: prev:
-    packages final prev
+    let
+      base = packages final prev;
+    in
+    base
     // {
+      luarocks-purifier = base.luarocks-purifier // {
+        cli = base.luarocks-purifier.cli.override { inherit purifierFlake; };
+      };
       buildLuarocksProject = final.callPackage ../../nix/lib/build-luarocks-project.nix {
         luarocks-purifier-shims = final.luarocks-purifier.shims;
+        inherit (closure-lib) purifier;
       };
     };
 }

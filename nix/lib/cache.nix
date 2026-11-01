@@ -23,16 +23,18 @@
   symlinkJoin,
   unzip,
   zip,
-  fetchgit,
-  fetchhg,
-  fetchsvn,
-  fetchcvs,
+  # The `purifier` namespace of the shared nix-purifiers library
+  # (github:nix-purifiers/purifier), whose fetchEntry fetches each entry.
+  purifier,
   lockFile,
   # The project source, when there is one: the lock reader checks that the
   # lockfile is current for it (see lock.nix).
   projectSource ? null,
-  # Overrides the files' fetcher (see fetch.nix).
-  fetchurl ? null,
+  # Fetchers that replace those of nixpkgs for the entries, by name
+  # (fetchurl, fetchgit, fetchhg, fetchsvn, fetchcvs), for credentials or
+  # mirrors. purifier.fetchEntry calls each with the arguments of the
+  # nixpkgs fetcher of the same name.
+  fetchers ? { },
   # The C libraries the rocks need, as a list of packages. The default is
   # the nixpkgs attributes the lockfile names in externalDeps.
   externalDeps ? null,
@@ -42,16 +44,7 @@ let
     inherit lockFile;
     src = projectSource;
   };
-  fetch = import ./fetch.nix {
-    inherit
-      lock
-      fetchgit
-      fetchhg
-      fetchsvn
-      fetchcvs
-      fetchurl
-      ;
-  };
+  fetch = purifier.fetchEntry ({ inherit pkgs; } // fetchers);
   luarocks = (import ./lua.nix { inherit pkgs; }).${lock.lua}.pkgs.luarocks;
 
   fetched = builtins.listToAttrs (

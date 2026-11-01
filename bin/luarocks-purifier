@@ -46,7 +46,7 @@ import sys
 import tempfile
 
 LOCK_FILE = "luarocks-purifier.lock.json"
-LOCK_VERSION = 1
+LOCK_VERSION = 2
 STATE_DIR = ".luarocks-purifier"
 TOOLS = ("curl", "git", "hg", "svn", "cvs", "sscm")
 LUA_VERSIONS = ("5.1", "5.2", "5.3", "5.4", "luajit")
@@ -581,7 +581,10 @@ def prefetch(kind, event, submodules):
         info = json.loads(subprocess.check_output(cmd, text=True))
         return info.get("hash") or to_sri(info["sha256"])
     if kind == "hg":
-        out = subprocess.check_output(["nix-prefetch-hg", event["url"], event["rev"]], text=True)
+        # `hg clone`, as LuaRocks runs it, checks out subrepositories.
+        out = subprocess.check_output(
+            ["nix-prefetch-hg", event["url"], event["rev"]], text=True, env=dict(os.environ, fetchSubrepos="1")
+        )
     elif kind == "svn":
         out = subprocess.check_output(["nix-prefetch-svn", event["url"], event["rev"]], text=True)
     hashes = [line.strip() for line in out.splitlines() if re.fullmatch(r"[0-9a-z]{52}|sha256-[A-Za-z0-9+/=]{44}", line.strip())]
@@ -789,13 +792,27 @@ def cmd_lock(argv, force):
                     "hash": prefetch("git", e, submodules),
                 }
             elif kind == "cvs":
+                if not e.get("ref"):
+                    fail(f"the CVS source {e['url']} {e['module']} names no tag, so the lock run cannot pin it")
                 entry = {
                     "path": path,
-                    "cvs": {"root": e["url"], "module": e["module"], "tag": e.get("ref")},
+                    "cvs": {"cvsRoot": e["url"], "module": e["module"], "tag": e["ref"], "date": None},
                     "hash": e["hash"],
                 }
+            elif kind == "hg":
+                entry = {
+                    "path": path,
+                    "hg": {"url": e["url"], "rev": e["rev"], "subrepos": True},
+                    "hash": prefetch(kind, e, False),
+                }
             else:
-                entry = {"path": path, kind: {"url": e["url"], "rev": e["rev"]}, "hash": prefetch(kind, e, False)}
+                # `svn checkout`, as LuaRocks runs it, takes externals and
+                # expands keywords.
+                entry = {
+                    "path": path,
+                    "svn": {"url": e["url"], "rev": e["rev"], "ignoreExternals": False, "ignoreKeywords": False},
+                    "hash": prefetch(kind, e, False),
+                }
             downloads.append(entry)
             checkout = {"kind": kind, "request": request, "ref": e.get("ref"), "path": path}
             if e.get("identifier"):
@@ -849,6 +866,9 @@ def realize(lock_path):
             "--arg",
             "nixpkgs",
             os.environ["LUAROCKS_PURIFIER_NIXPKGS"],
+            "--argstr",
+            "purifierFlake",
+            os.environ["LUAROCKS_PURIFIER_LIBRARY"],
             "--out-link",
             out_link,
         ],
@@ -929,6 +949,9 @@ def cmd_publish(argv):
             "--argstr",
             "rockspec",
             rockspec,
+            "--argstr",
+            "purifierFlake",
+            os.environ["LUAROCKS_PURIFIER_LIBRARY"],
         ]
     )[0]
     rock_file = os.path.join(rock, f"{info['package']}-{info['version']}.src.rock")

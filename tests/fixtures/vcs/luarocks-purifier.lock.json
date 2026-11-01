@@ -23,8 +23,9 @@
   "downloads": [
     {
       "cvs": {
+        "cvsRoot": ":pserver:anonymous@cvs.example.org:/cvsroot",
+        "date": null,
         "module": "cvsrock",
-        "root": ":pserver:anonymous@cvs.example.org:/cvsroot",
         "tag": "REL_1_0"
       },
       "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
@@ -34,6 +35,7 @@
       "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       "hg": {
         "rev": "0123456789abcdef0123456789abcdef01234567",
+        "subrepos": true,
         "url": "https://hg.example.org/hgrock"
       },
       "path": "vcs/hg/hgrock"
@@ -42,6 +44,8 @@
       "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       "path": "vcs/svn/svnrock",
       "svn": {
+        "ignoreExternals": false,
+        "ignoreKeywords": false,
         "rev": "5",
         "url": "svn.example.org/svnrock"
       }
@@ -74,5 +78,5 @@
       "rocks"
     ]
   ],
-  "version": 1
+  "version": 2
 }

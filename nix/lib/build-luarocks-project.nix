@@ -26,16 +26,19 @@
 #   externalDeps  the C libraries the rocks need, as a list of packages; the
 #                 default is the nixpkgs attributes the lockfile names
 #   doCheck       run `luarocks test` for each rock (default false)
-#   fetchurl      a fetcher for the locked files, called with
-#                 { name, urls, hash }, for credentials or other mirrors
-#   fetchgit, fetchhg, fetchsvn, fetchcvs
-#                 the fetchers for locked checkouts
+#   fetchurl, fetchgit, fetchhg, fetchsvn, fetchcvs
+#                 fetchers that replace those of nixpkgs for the locked
+#                 downloads, for credentials or other mirrors; the shared
+#                 library's fetchEntry calls each with the arguments of the
+#                 nixpkgs fetcher of the same name
 {
   lib,
   pkgs,
   stdenv,
   callPackage,
   luarocks-purifier-shims,
+  # The `purifier` namespace of the shared nix-purifiers library.
+  purifier,
   unzip,
   zip,
   gnutar,
@@ -44,40 +47,31 @@
   xz,
   cmake,
   gnumake,
-  fetchgit,
-  fetchhg,
-  fetchsvn,
-  fetchcvs,
 }:
-let
-  defaultFetchgit = fetchgit;
-  defaultFetchhg = fetchhg;
-  defaultFetchsvn = fetchsvn;
-  defaultFetchcvs = fetchcvs;
-in
 {
   src,
   lockFile ? src + "/luarocks-purifier.lock.json",
   externalDeps ? null,
   doCheck ? false,
   fetchurl ? null,
-  fetchgit ? defaultFetchgit,
-  fetchhg ? defaultFetchhg,
-  fetchsvn ? defaultFetchsvn,
-  fetchcvs ? defaultFetchcvs,
+  fetchgit ? null,
+  fetchhg ? null,
+  fetchsvn ? null,
+  fetchcvs ? null,
 }:
 let
   cache = callPackage ./cache.nix {
     projectSource = source;
-    inherit
-      lockFile
-      externalDeps
-      fetchurl
-      fetchgit
-      fetchhg
-      fetchsvn
-      fetchcvs
-      ;
+    inherit lockFile externalDeps purifier;
+    fetchers = lib.filterAttrs (_: f: f != null) {
+      inherit
+        fetchurl
+        fetchgit
+        fetchhg
+        fetchsvn
+        fetchcvs
+        ;
+    };
   };
   inherit (cache) lock luarocks externals;
   lua = (import ./lua.nix { inherit pkgs; }).${lock.lua};
