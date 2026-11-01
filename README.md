@@ -35,7 +35,15 @@ Its options are saved in the lockfile, and a later `lock` reuses them:
 | `--external-dep ATTR` | A nixpkgs attribute that provides a C library a rock needs, such as `zlib` or `openssl` (repeatable). |
 | `--rockspec FILE` | A rockspec of the project (repeatable). The default is every `*.rockspec` in the project root. |
 
-Build the project with the builder in the flake's library:
+The flake's `overlays.default` adds `buildLuarocksProject` to a package set,
+where nixpkgs keeps its own builders. A package written for `callPackage`
+takes it by name:
+
+```nix
+# package.nix
+{ buildLuarocksProject }:
+(buildLuarocksProject { src = ./.; }).packages.app
+```
 
 ```nix
 {
@@ -44,24 +52,22 @@ Build the project with the builder in the flake's library:
 
   outputs = { nixpkgs, luarocks-purifier, ... }:
     let
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      project = luarocks-purifier.lib.luarocks-purifier.buildLuarocksProject {
-        inherit pkgs;
-        src = ./.;
+      pkgs = import nixpkgs {
+        system = "x86_64-linux";
+        overlays = [ luarocks-purifier.overlays.default ];
       };
     in
     {
-      packages.x86_64-linux.default = project.packages.app;
-      checks.x86_64-linux.tests = project.tests;
+      packages.x86_64-linux.default = pkgs.callPackage ./package.nix { };
     };
 }
 ```
 
-The builder takes these arguments:
+`buildLuarocksProject.override` replaces any package the builder takes from
+the package set. The builder takes these arguments:
 
 | Argument | Meaning |
 |---|---|
-| `pkgs` | The package set to build with. |
 | `src` | The project root. |
 | `lockFile` | The lockfile. The default is `luarocks-purifier.lock.json` in `src`. A lockfile outside `src` replaces any copy in it, so a packaging flake can build a project whose author does not use luarocks-purifier. |
 | `luarocksLock` | LuaRocks' own lockfile, `luarocks.lock`, for a `src` that holds none. It replaces any copy in `src`. |
@@ -85,12 +91,12 @@ reads the lockfile into the lock in memory that every purifier shares, for
 tools such as SBOM generators: `purifier`, the download `entries`, the
 `outputs` of each rock (its rockspec, version, commands and modules), and
 `problems`, which names `luarocks-purifier lock` for a lockfile that is out
-of date, changed by hand or not valid. The builder checks it with
-`checkLock` of the shared purifier library.
+of date or changed by hand. The builder checks it with `checkLock` of the
+shared purifier library.
 
-## Everyday loop
+## Development loop
 
-The everyday loop is LuaRocks' own commands, run on the locked files:
+The development loop is LuaRocks' own commands, run on the locked files:
 
 ```zsh
 nix run github:nix-purifiers/luarocks-purifier -- luarocks make
@@ -125,16 +131,18 @@ A lock of an unchanged project reproduces the lockfile byte for byte, as
 long as the rocks servers serve the same files.
 
 Every command takes `--lockfile PATH` before its other arguments, for a
-lockfile outside the project root.
+lockfile outside the project root. The environment variable
+`LUAROCKS_PURIFIER_LOCKFILE` names the same path, and `--lockfile` takes
+precedence over it.
 
-## Offline work
+## Working offline
 
 ```zsh
 nix run github:nix-purifiers/luarocks-purifier -- prefetch
 ```
 
-realizes everything the everyday loop needs in the Nix store and keeps it
-with two garbage-collector roots in `.luarocks-purifier/`. `cache` holds
+realizes everything the development loop needs in the Nix store and keeps
+it with two garbage-collector roots in `.luarocks-purifier/`. `cache` holds
 the locked files and C libraries, and `tools` holds luarocks-purifier with
 its LuaRocks, Lua, C compiler and nixpkgs. `prefetch` also installs the
 dependencies and test dependencies of every rockspec into `lua_modules`.
@@ -157,7 +165,7 @@ project root sets its library path:
 
 For LuaJIT and Lua 5.1, the directory is `lua_modules/share/lua/5.1`.
 
-## Errors and fixes
+## Troubleshooting
 
 Every error names the command that fixes it.
 
@@ -170,17 +178,17 @@ Every error names the command that fixes it.
 | A rock links a C library LuaRocks cannot find. | `luarocks-purifier lock --external-dep ATTR`, with the nixpkgs attribute of the library. |
 | A server changed a file it serves (a hash mismatch when Nix fetches it). | `luarocks-purifier lock` |
 
-The commands, the interactive mode and the Nix build all stop on these;
-none of them falls back to the network.
+The commands and the Nix build stop on each of these errors.
 
 A rock that links a C library from outside LuaRocks names it under
 `external_dependencies`, and `--external-dep` gives the nixpkgs package.
-The lockfile records the attribute name, and the lock run, the interactive
-mode and the sandboxed build put the library's headers and libraries where
-LuaRocks and the C compiler look for them. The libraries of the C library
-itself, such as `m`, `dl`, `pthread` and `rt`, need no option.
+The lockfile records the attribute name, and the lock run,
+`luarocks-purifier luarocks` and the sandboxed build put the library's
+headers and libraries where LuaRocks and the C compiler look for them. The
+libraries of the C library itself, such as `m`, `dl`, `pthread` and `rt`,
+need no option.
 
-## Sources supported and refused
+## Supported language repositories
 
 | Source | How it is locked |
 |---|---|
@@ -196,7 +204,7 @@ The lock run searches only for platform-neutral rocks (rockspecs, source
 rocks and `all` rocks), so one lockfile builds on every platform, and C
 code is compiled in the sandbox.
 
-These are refused or limited:
+Limits:
 
 - A rockspec whose source is Surround SCM (`sscm://`) stops the lock run.
   Surround SCM is proprietary, its server needs credentials for every
@@ -241,14 +249,20 @@ flake:
     flake = false;
   };
 
-  outputs = { nixpkgs, luarocks-purifier, luacheck, ... }: {
-    packages.x86_64-linux.default =
-      (luarocks-purifier.lib.luarocks-purifier.buildLuarocksProject {
-        pkgs = nixpkgs.legacyPackages.x86_64-linux;
-        src = luacheck;
-        lockFile = ./luarocks-purifier.lock.json;
-      }).packages.luacheck;
-  };
+  outputs = { nixpkgs, luarocks-purifier, luacheck, ... }:
+    let
+      pkgs = import nixpkgs {
+        system = "x86_64-linux";
+        overlays = [ luarocks-purifier.overlays.default ];
+      };
+    in
+    {
+      packages.x86_64-linux.default =
+        (pkgs.buildLuarocksProject {
+          src = luacheck;
+          lockFile = ./luarocks-purifier.lock.json;
+        }).packages.luacheck;
+    };
 }
 ```
 
@@ -259,8 +273,8 @@ cd ../luacheck-nix
 nix run path:. -- --version
 ```
 
-To work on luacheck itself, run the everyday commands in the checkout, and
-name the lockfile that lies outside it:
+To work on luacheck itself, run the development commands in the checkout,
+and name the lockfile that lies outside it:
 
 ```zsh
 cd ../luacheck

@@ -12,11 +12,10 @@
   purifierFlake,
 }:
 let
-  buildLuarocksProject = import ./build-luarocks-project.nix {
+  pkgs = import nixpkgs { };
+  buildLuarocksProject = pkgs.callPackage ./build-luarocks-project.nix {
+    luarocks-purifier.shims = pkgs.callPackage ../../pkgs/shims { };
     inherit ((builtins.getFlake purifierFlake).lib) purifier;
   };
 in
-(buildLuarocksProject {
-  pkgs = import nixpkgs { };
-  inherit src lockFile;
-}).release
+(buildLuarocksProject { inherit src lockFile; }).release

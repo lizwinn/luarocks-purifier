@@ -15,8 +15,10 @@
 #   problems  the message of lock-problem.nix, when the lockfile is out of
 #             date, changed by hand, not valid, or of another format version
 #
-# `entries` and `outputs` are empty when there is a problem. A lockfile
-# that is not JSON fails evaluation in builtins.fromJSON.
+# `entries` and `outputs` are empty when there is a problem. Nix cannot
+# catch a parse error, so a lockfile that is not valid JSON fails
+# evaluation with an error context that names `luarocks-purifier lock`; the
+# commands of luarocks-purifier check the file before Nix reads it.
 {
   # The project source, or null to read the lockfile without checking that
   # it is current.
@@ -26,7 +28,9 @@
   luarocksLock ? null,
 }:
 let
-  parsed = builtins.fromJSON (builtins.readFile lockFile);
+  parsed = builtins.addErrorContext "luarocks-purifier: ${toString lockFile} is not valid JSON. Run `luarocks-purifier lock` in the project root." (
+    builtins.fromJSON (builtins.readFile lockFile)
+  );
   problem = import ./lock-problem.nix {
     inherit parsed src luarocksLock;
     name = toString lockFile;

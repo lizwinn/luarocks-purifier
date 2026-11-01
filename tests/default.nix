@@ -6,8 +6,9 @@
 # real-world project luacheck.
 {
   pkgs,
-  # lib.luarocks-purifier.buildLuarocksProject and readLock of this flake.
-  buildLuarocksProject,
+  # The default package overlay of this flake, which adds buildLuarocksProject.
+  overlay,
+  # lib.luarocks-purifier.readLock of this flake.
   readLock,
   cli,
   # The source of luacheck v1.2.0, a flake input of the check partition.
@@ -15,7 +16,7 @@
 }:
 let
   inherit (pkgs) lib;
-  build = args: buildLuarocksProject ({ inherit pkgs; } // args);
+  build = (pkgs.extend overlay).buildLuarocksProject;
   contentHash = import ../nix/lib/content-hash.nix;
 
   # app: a rock with a command, Lua modules, a C dependency (lpeg), a git

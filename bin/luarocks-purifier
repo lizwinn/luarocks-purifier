@@ -18,7 +18,9 @@
 #                                        its source rock with `luarocks upload`
 #
 # Every command takes `--lockfile PATH` before its other arguments, for a
-# lockfile outside the project root.
+# lockfile outside the project root. The environment variable
+# LUAROCKS_PURIFIER_LOCKFILE names the same path, and `--lockfile` takes
+# precedence over it.
 #
 # Options of lock (the lockfile records them, and a later lock reuses them
 # unless they are given again):
@@ -1185,10 +1187,12 @@ def main():
         print(__doc__ or open(__file__).read().split("\n\n")[1])
         return 0
     command, rest = args[0], args[1:]
+    global lock_path_given
+    if os.environ.get("LUAROCKS_PURIFIER_LOCKFILE"):
+        lock_path_given = os.path.abspath(os.environ["LUAROCKS_PURIFIER_LOCKFILE"])
     if rest[:1] == ["--lockfile"]:
         if len(rest) < 2:
             fail("--lockfile needs a path")
-        global lock_path_given
         lock_path_given = os.path.abspath(rest[1])
         rest = rest[2:]
     commands = {

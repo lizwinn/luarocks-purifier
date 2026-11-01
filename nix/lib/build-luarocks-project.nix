@@ -1,14 +1,20 @@
 # SPDX-License-Identifier: MIT
 #
 # buildLuarocksProject: builds the rocks of a LuaRocks project offline in
-# the Nix sandbox, from its luarocks-purifier lockfile. The flake's library
-# holds it as `lib.luarocks-purifier.buildLuarocksProject`.
+# the Nix sandbox, from its luarocks-purifier lockfile.
 #
-#   buildLuarocksProject { inherit pkgs; src = ./.; }
+# The file is a package for callPackage: the first argument set is what it
+# takes from the package set, and the result is the builder. The overlay
+# `overlays.default` of this flake adds it to the package set as
+# `buildLuarocksProject`, so a package written for callPackage takes it like
+# any other builder:
 #
-# Arguments:
+#   { buildLuarocksProject }: (buildLuarocksProject { src = ./.; }).packages.app
 #
-#   pkgs          the package set to build with
+# and `buildLuarocksProject.override` replaces what it takes from the set.
+#
+# The builder's arguments:
+#
 #   src           the project root
 #   lockFile      the lockfile; the default is src's
 #                 luarocks-purifier.lock.json. A lockfile outside src
@@ -38,9 +44,31 @@
 #                       <package>-<version>.src.rock for each rockspec
 #   fetches             the download entries of the lockfile, in the shape
 #                       of the shared purifier library
-{ purifier }:
 {
+  lib,
+  stdenv,
+  # The package set, from which the lockfile names C libraries and the Lua
+  # of the build (see lua.nix).
   pkgs,
+  callPackage,
+  runCommand,
+  linkFarm,
+  symlinkJoin,
+  unzip,
+  zip,
+  gnutar,
+  gzip,
+  bzip2,
+  xz,
+  cmake,
+  gnumake,
+  # The luarocks-purifier package scope, whose `shims` stand in for the
+  # tools LuaRocks runs.
+  luarocks-purifier,
+  # The `purifier` namespace of the shared nix-purifiers library.
+  purifier,
+}:
+{
   src,
   lockFile ? src + "/luarocks-purifier.lock.json",
   luarocksLock ? null,
@@ -48,10 +76,9 @@
   fetchers ? { },
 }:
 let
-  inherit (pkgs) lib stdenv;
-  luarocks-purifier-shims = pkgs.callPackage ../../pkgs/shims { };
+  luarocks-purifier-shims = luarocks-purifier.shims;
 
-  cache = pkgs.callPackage ./cache.nix {
+  cache = callPackage ./cache.nix {
     projectSource = cleanSource;
     inherit
       lockFile
@@ -82,7 +109,7 @@ let
     if luarocksLock == null then
       cleanSource
     else
-      pkgs.runCommand "source" { } ''
+      runCommand "source" { } ''
         cp -r ${cleanSource} $out
         chmod -R u+w $out
         cp ${luarocksLock} $out/luarocks.lock
@@ -159,7 +186,7 @@ let
     lua
     luarocks-purifier-shims
   ]
-  ++ (with pkgs; [
+  ++ [
     unzip
     zip
     gnutar
@@ -168,7 +195,7 @@ let
     xz
     cmake
     gnumake
-  ]);
+  ];
 
   # How LuaRocks requests the rockspec's own source, which the source rock
   # holds: the tool it runs and the URL it passes (LuaRocks drops a "git+"
@@ -405,13 +432,13 @@ let
 in
 {
   inherit packages;
-  tests = pkgs.linkFarm "tests" (
+  tests = linkFarm "tests" (
     map (info: {
       name = info.package;
       path = testFor info;
     }) (builtins.filter (info: info.tests) lock.rockspecs)
   );
-  release = pkgs.symlinkJoin {
+  release = symlinkJoin {
     name = "release";
     paths = map rockFor lock.rockspecs;
   };
