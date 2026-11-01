@@ -214,16 +214,19 @@ These are refused or limited:
 - A dependency on `scm` or `dev` versions locks the commit the branch points
   at during the lock run. A relock moves it to the newest commit.
 
-## Real-world projects
+## Examples
 
-| Project | What CI checks |
-|---|---|
-| [luacheck](https://github.com/lunarmodules/luacheck) v1.2.0 | The flake check `real-luacheck` builds luacheck, unchanged, from a lockfile kept outside its source, and runs it on its own source. The CI job `real-luacheck` adds the three test dependencies that luacheck's own CI installs by hand (`lanes`, `luautf8` and `luasocket`) to its rockspec, locks it, runs its 460 specs in the sandbox, prefetches, and runs them again with `luarocks test` with the network cut off. |
+CI locks and builds real projects as examples of luarocks-purifier at work.
+The examples are not a list of the projects it has been tried on or works
+with.
 
-luacheck found three defects, which are fixed: the C library of the
-compiler was not where LuaRocks looks for `rt`, a builder attribute hid a
-package's `outputs`, and the interactive mode dropped Lua's default module
-path.
+[luacheck](https://github.com/lunarmodules/luacheck) v1.2.0 is a Lua linter
+with a busted test suite. The flake check `real-luacheck` builds it,
+unchanged, from a lockfile kept outside its source, and runs it on its own
+source. The CI job `real-luacheck` adds the three test dependencies that
+luacheck's own CI installs by hand (`lanes`, `luautf8` and `luasocket`) to
+its rockspec, locks it, runs its 460 specs in the sandbox, prefetches, and
+runs them again with `luarocks test` with the network cut off.
 
 ## Credits
 
