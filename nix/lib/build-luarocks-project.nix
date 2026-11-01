@@ -214,8 +214,10 @@ let
       }
     else if has "cvs://" url then
       {
+        # LuaRocks takes the CVS root from the URL and the module from
+        # source.module, or else from the last part of the URL.
         kind = "cvs";
-        url = "${s.pathname or ""} ${s.module or (baseNameOf url)}";
+        url = "${lib.removePrefix "cvs://" url} ${s.module or (baseNameOf url)}";
       }
     else if builtins.match "(https?|ftp)://.*" url != null then
       {

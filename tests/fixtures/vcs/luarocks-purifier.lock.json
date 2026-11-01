@@ -1,0 +1,78 @@
+{
+  "checkouts": [
+    {
+      "kind": "cvs",
+      "path": "vcs/cvs/cvsrock",
+      "ref": "REL_1_0",
+      "request": ":pserver:anonymous@cvs.example.org:/cvsroot cvsrock"
+    },
+    {
+      "kind": "hg",
+      "path": "vcs/hg/hgrock",
+      "ref": "1.0",
+      "request": "https://hg.example.org/hgrock"
+    },
+    {
+      "kind": "svn",
+      "path": "vcs/svn/svnrock",
+      "ref": "5",
+      "request": "svn.example.org/svnrock"
+    }
+  ],
+  "definitionHash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "downloads": [
+    {
+      "cvs": {
+        "module": "cvsrock",
+        "root": ":pserver:anonymous@cvs.example.org:/cvsroot",
+        "tag": "REL_1_0"
+      },
+      "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "path": "vcs/cvs/cvsrock"
+    },
+    {
+      "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "hg": {
+        "rev": "0123456789abcdef0123456789abcdef01234567",
+        "url": "https://hg.example.org/hgrock"
+      },
+      "path": "vcs/hg/hgrock"
+    },
+    {
+      "hash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "path": "vcs/svn/svnrock",
+      "svn": {
+        "rev": "5",
+        "url": "svn.example.org/svnrock"
+      }
+    }
+  ],
+  "externalDeps": [],
+  "lua": "5.4",
+  "luarocks": "3.13.0-1",
+  "rockspecs": [
+    {
+      "file": "vcs-1.0-1.rockspec",
+      "outputs": {
+        "bin": [],
+        "lib": [],
+        "lua": [
+          "vcs.lua"
+        ]
+      },
+      "package": "vcs",
+      "projectDependencies": [],
+      "source": {
+        "ref": "v1.0",
+        "url": "git+https://example.org/vcs.git"
+      },
+      "version": "1.0-1"
+    }
+  ],
+  "servers": [
+    [
+      "rocks"
+    ]
+  ],
+  "version": 1
+}

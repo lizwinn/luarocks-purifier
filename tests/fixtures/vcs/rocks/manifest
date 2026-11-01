@@ -1,0 +1,25 @@
+commands = {}
+modules = {}
+repository = {
+   cvsrock = {
+      ["1.0-1"] = {
+         {
+            arch = "rockspec"
+         }
+      }
+   },
+   hgrock = {
+      ["1.0-1"] = {
+         {
+            arch = "rockspec"
+         }
+      }
+   },
+   svnrock = {
+      ["1.0-1"] = {
+         {
+            arch = "rockspec"
+         }
+      }
+   }
+}

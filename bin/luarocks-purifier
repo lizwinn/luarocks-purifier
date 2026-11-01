@@ -470,13 +470,13 @@ def rockspec_info(lua_bin, rockspec):
         "if setfenv then setfenv(chunk, env) else chunk = assert(loadfile(PATH, 't', env)) end; chunk(); "
         "local s = env.source or {}; "
         "local function o(x) io.write((x or ''), '\\n') end; "
-        "o(env.package); o(env.version); o(s.url); o(s.tag or s.branch); o(s.dir); o(s.md5); o(s.pathname); o(s.module); "
+        "o(env.package); o(env.version); o(s.url); o(s.tag or s.cvs_tag or s.branch); o(s.dir); o(s.md5); o(s.module or s.cvs_module); "
         "local names = {}; "
         "for _, d in ipairs(env.dependencies or {}) do names[#names + 1] = d:match('^%s*([^%s<>=~]+)') end; "
         "o(table.concat(names, ' '))"
     ).replace("PATH", lua_string(os.path.abspath(rockspec)))
     out = subprocess.check_output([lua_bin, "-e", script], text=True)
-    package, version, url, ref, sdir, md5, pathname, module, deps = (out.split("\n") + [""] * 9)[:9]
+    package, version, url, ref, sdir, md5, module, deps = (out.split("\n") + [""] * 8)[:8]
     return {
         "file": rockspec,
         "package": package,
@@ -489,7 +489,6 @@ def rockspec_info(lua_bin, rockspec):
                 "ref": ref,
                 "dir": sdir,
                 "md5": md5,
-                "pathname": pathname,
                 "module": module,
             }.items()
             if v
@@ -896,6 +895,8 @@ def cmd_publish(argv):
     luarocks_pkg = luarocks_packages()[lock["lua"]]
     env = dict(os.environ)
     env["LUA_INIT"] = "@" + nix_lib("tmpname.lua")
+    # Certificate checks on, which LuaRocks leaves off by default.
+    env["LUAROCKS_CONFIG"] = nix_lib("publish-config.lua")
     os.execve(
         os.path.join(luarocks_pkg["luarocks"], "bin", "luarocks"),
         ["luarocks", "upload", rockspec, rock_file] + upload_args,

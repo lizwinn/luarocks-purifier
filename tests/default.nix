@@ -26,6 +26,19 @@ let
   # project source stands in for, and an archive pinned by md5 (lib-demo),
   # which the lock holds.
   lib = p.buildLuarocksProject { src = ./fixtures/lib; };
+
+  # vcs: dependencies from Mercurial, Subversion and CVS. Its lockfile is
+  # written by hand, and the checkouts come from tests/vcs-checkouts in
+  # place of the fetchers, so the check covers how LuaRocks gets each kind
+  # of checkout offline. tests/interactive.sh covers how the lock run
+  # records them, against local repositories.
+  vcs =
+    (p.buildLuarocksProject {
+      src = ./fixtures/vcs;
+      fetchhg = _: ./vcs-checkouts/hgrock;
+      fetchsvn = _: ./vcs-checkouts/svnrock;
+      fetchcvs = _: ./vcs-checkouts/cvsrock;
+    }).packages.vcs;
 in
 {
   inherit cli;
@@ -38,6 +51,40 @@ in
     echo "$output"
     echo "$output" | grep -q 'LuaJIT'
     test -f ${lib.packages.lib.modules.lib}
+    touch $out
+  '';
+
+  # `luarocks upload`, as `luarocks-purifier publish` runs it, sends the
+  # rockspec and the source rock Nix packed, byte for byte, to a stand-in
+  # for the luarocks.org upload API.
+  app-publish =
+    p.runCommand "app-publish"
+      {
+        nativeBuildInputs = [
+          p.python3
+          p.curl
+          app.luarocks
+        ];
+      }
+      ''
+        export HOME=$TMPDIR/home LUA_INIT=@${../nix/lib/tmpname.lua} LUAROCKS_CONFIG=${../nix/lib/publish-config.lua}
+        mkdir -p $HOME
+        python3 ${./fake-luarocks-server.py} $TMPDIR/uploads $TMPDIR/port &
+        while [ ! -f $TMPDIR/port ]; do sleep 0.1; done
+        cp -r ${./fixtures/app} src
+        cd src
+        luarocks upload app-0.1-1.rockspec ${app.rock}/app-0.1-1.src.rock \
+          --server "http://127.0.0.1:$(cat $TMPDIR/port)" --api-key test
+        cmp $TMPDIR/uploads/app-0.1-1.rockspec app-0.1-1.rockspec
+        cmp $TMPDIR/uploads/app-0.1-1.src.rock ${app.rock}/app-0.1-1.src.rock
+        touch $out
+      '';
+
+  vcs-runs = p.runCommand "vcs-runs" { } ''
+    LUA_PATH='${vcs}/share/lua/5.4/?.lua' ${vcs.lua}/bin/lua -e '
+      local s = require("vcs").sources
+      assert(s[1] == "mercurial" and s[2] == "subversion" and s[3] == "cvs")
+    '
     touch $out
   '';
 
