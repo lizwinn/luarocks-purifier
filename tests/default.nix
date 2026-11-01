@@ -19,9 +19,36 @@ let
     src = ./fixtures/app;
     doCheck = true;
   }).packages.app;
+  # lib: a LuaJIT project with two rockspecs, where lib-demo depends on
+  # lib, a local rocks server (rocks/) with a git source of rockspec format
+  # 3.0 (so with submodules), and the two kinds of own source a source rock
+  # holds: a release archive that does not exist yet (lib), which the
+  # project source stands in for, and an archive pinned by md5 (lib-demo),
+  # which the lock holds.
+  lib = p.buildLuarocksProject { src = ./fixtures/lib; };
 in
 {
   inherit cli;
+
+  lib = lib.packages.lib;
+  lib-demo = lib.packages.lib-demo;
+
+  lib-runs = p.runCommand "lib-runs" { } ''
+    output=$(${lib.packages.lib-demo.bin.lib-demo})
+    echo "$output"
+    echo "$output" | grep -q 'LuaJIT'
+    test -f ${lib.packages.lib.modules.lib}
+    touch $out
+  '';
+
+  lib-rocks = p.runCommand "lib-rocks" { nativeBuildInputs = [ p.unzip ]; } ''
+    unzip -l ${lib.packages.lib.rock}/lib-1.0-1.src.rock | tee lib
+    grep -q 'lib-1.0.tar.gz' lib
+    unzip -p ${lib.packages.lib.rock}/lib-1.0-1.src.rock lib-1.0.tar.gz | tar -tzf - | grep -q 'lib-1.0/src/lib.lua'
+    unzip -l ${lib.packages.lib-demo.rock}/lib-demo-1.0-1.src.rock | tee demo
+    grep -q '0.7.1.zip' demo
+    touch $out
+  '';
 
   app = app;
 

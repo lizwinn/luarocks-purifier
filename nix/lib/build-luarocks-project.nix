@@ -96,6 +96,39 @@ let
 
   luaString = s: builtins.toJSON s;
 
+  # The rocks servers as LuaRocks searches them offline: a local server (a
+  # directory of the project) in the project source, and the locked files
+  # of every remote server in the cache.
+  servers = lib.unique (
+    map (
+      group:
+      let
+        first = builtins.head group;
+      in
+      if builtins.match "[a-z][a-z0-9+.-]*://.*" first != null then
+        "${cache}/server"
+      else
+        "${source}/${first}"
+    ) lock.servers
+  );
+
+  infosByFile = builtins.listToAttrs (
+    map (info: {
+      name = info.file;
+      value = info;
+    }) lock.rockspecs
+  );
+
+  # The project rockspecs a rockspec depends on, each after its own, as
+  # `luarocks make` installs them before the rockspec itself.
+  projectDependencies =
+    info:
+    lib.unique (
+      lib.concatMap (file: projectDependencies infosByFile.${file} ++ [ file ]) (
+        info.projectDependencies or [ ]
+      )
+    );
+
   # The LuaRocks configuration of a sandboxed run, with the tree and the
   # rocks servers given as shell words.
   writeConfig = ''
@@ -105,7 +138,7 @@ let
     check_certificates = true
     local_cache = "$TMPDIR/luarocks-local-cache"
     rocks_trees = { $2 }
-    rocks_servers = { "${cache}/server" }
+    rocks_servers = { ${lib.concatMapStringsSep ", " luaString servers} }
     external_deps_dirs = { ${lib.concatMapStringsSep ", " (d: luaString "${d}") externals} }
     variables = {
       WGET = "/nonexistent/wget",
@@ -227,7 +260,7 @@ let
             {
               kind = "file";
               inherit (r) url;
-              path = "${cache.fetched.${r.archive.path}}";
+              path = "${cache.fetched.${r.archive}}";
             }
           ])
         }
@@ -245,9 +278,10 @@ let
           *.tar.xz|*.txz) tar -cJf "$archive" -C "$TMPDIR/self-archive" ${lib.escapeShellArg r.dir} ;;
           *) tar -czf "$archive" -C "$TMPDIR/self-archive" ${lib.escapeShellArg r.dir} ;;
         esac
-        export LUAROCKS_PURIFIER_SELF="[{\"kind\": \"file\", \"url\": ${
+        LUAROCKS_PURIFIER_SELF=$(printf '[{"kind": "file", "url": %s, "path": "%s"}]' ${
           lib.escapeShellArg (builtins.toJSON r.url)
-        }, \"path\": \"$archive\"}]"
+        } "$archive")
+        export LUAROCKS_PURIFIER_SELF
       '';
 
   # The attribute name of a module file: "foo/bar.lua" and "foo/bar/init.lua"
@@ -302,7 +336,9 @@ let
           ${writeConfig}
           writeConfig "$TMPDIR/config.lua" '{ name = "out", root = "'"$out"'" }'
           export LUAROCKS_CONFIG=$TMPDIR/config.lua
-          luarocks make ${lib.escapeShellArg info.file}
+          ${lib.concatMapStrings (file: ''
+            luarocks make ${lib.escapeShellArg file}
+          '') (projectDependencies info ++ [ info.file ])}
           runHook postBuild
         '';
         checkPhase = ''
@@ -338,7 +374,9 @@ let
           rock = rockFor info;
           inherit lua luarocks;
         };
-        meta.mainProgram = if info.outputs.bin == [ ] then null else builtins.head info.outputs.bin;
+        meta = lib.optionalAttrs (info.outputs.bin != [ ]) {
+          mainProgram = builtins.head info.outputs.bin;
+        };
       });
     in
     package;

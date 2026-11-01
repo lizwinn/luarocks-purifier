@@ -340,14 +340,33 @@ def lua_list(items):
     return "{ " + ", ".join(items) + " }"
 
 
+def is_remote(server):
+    return re.match(r"^[a-z][a-z0-9+.-]*://", server) is not None
+
+
+# The rocks servers of a lockfile as LuaRocks searches them: a local server
+# (a directory of the project) under `base`, and every remote one replaced
+# by `offline` when it is given.
+def resolve_servers(servers, base, offline=None):
+    out = []
+    for group in servers:
+        if is_remote(group[0]):
+            if offline is None:
+                out.append(group)
+            elif [offline] not in out:
+                out.append([offline])
+        else:
+            out.append([os.path.join(base, group[0])])
+    return out
+
+
 def write_config(path, *, tree, cache_dir, servers, external_dirs, arch=None):
     lines = [
         "fs_use_modules = false",
         "check_certificates = true",
         f"local_cache = {lua_string(cache_dir)}",
         f"rocks_trees = {{ {{ name = \"purifier\", root = {lua_string(tree)} }} }}",
-        "rocks_servers = "
-        + lua_list(lua_list(lua_string(u) for u in group) if isinstance(group, list) else lua_string(group) for group in servers),
+        "rocks_servers = " + lua_list(lua_list(lua_string(u) for u in group) for group in servers),
         "external_deps_dirs = " + lua_list(lua_string(d) for d in external_dirs),
         "variables = {",
         '  WGET = "/nonexistent/wget",',
@@ -451,14 +470,18 @@ def rockspec_info(lua_bin, rockspec):
         "if setfenv then setfenv(chunk, env) else chunk = assert(loadfile(PATH, 't', env)) end; chunk(); "
         "local s = env.source or {}; "
         "local function o(x) io.write((x or ''), '\\n') end; "
-        "o(env.package); o(env.version); o(s.url); o(s.tag or s.branch); o(s.dir); o(s.md5); o(s.pathname); o(s.module)"
+        "o(env.package); o(env.version); o(s.url); o(s.tag or s.branch); o(s.dir); o(s.md5); o(s.pathname); o(s.module); "
+        "local names = {}; "
+        "for _, d in ipairs(env.dependencies or {}) do names[#names + 1] = d:match('^%s*([^%s<>=~]+)') end; "
+        "o(table.concat(names, ' '))"
     ).replace("PATH", lua_string(os.path.abspath(rockspec)))
     out = subprocess.check_output([lua_bin, "-e", script], text=True)
-    package, version, url, ref, sdir, md5, pathname, module = (out.split("\n") + [""] * 8)[:8]
+    package, version, url, ref, sdir, md5, pathname, module, deps = (out.split("\n") + [""] * 9)[:9]
     return {
         "file": rockspec,
         "package": package,
         "version": version,
+        "dependencyNames": deps.lower().split(),
         "source": {
             k: v
             for k, v in {
@@ -554,7 +577,9 @@ def to_sri(nix32):
 
 def server_group(url, servers):
     for group in servers:
-        members = group if isinstance(group, list) else [group]
+        if not is_remote(group[0]):
+            continue
+        members = group
         for base in members:
             b = base.rstrip("/") + "/"
             if url.startswith(b) and "/" not in url[len(b) :]:
@@ -587,10 +612,21 @@ def lock_options(argv, previous):
             i += 2
         else:
             fail(f"unknown option {a}")
+
+    def server(u):
+        if is_remote(u):
+            return [u.rstrip("/")]
+        # A local rocks server is a directory of the project, which the
+        # sandboxed build finds in the project source.
+        rel = os.path.relpath(os.path.abspath(u), root())
+        if rel.startswith(".."):
+            fail(f"the rocks server {u} is outside the project; a local rocks server must be a directory of the project")
+        return [rel]
+
     if only:
-        opts["servers"] = [[u.rstrip("/")] for u in only]
+        opts["servers"] = [server(u) for u in only]
     elif servers_before:
-        opts["servers"] = [[u.rstrip("/")] for u in servers_before] + DEFAULT_SERVERS
+        opts["servers"] = [server(u) for u in servers_before] + DEFAULT_SERVERS
     if externals:
         opts["externalDeps"] = sorted(set(externals))
     if rockspecs:
@@ -643,7 +679,7 @@ def cmd_lock(argv, force):
         config,
         tree=os.path.join(state, "tree"),
         cache_dir=os.path.join(state, "cache"),
-        servers=opts["servers"],
+        servers=resolve_servers(opts["servers"], work),
         external_dirs=externals,
         arch=NEUTRAL_ARCH,
     )
@@ -704,10 +740,9 @@ def cmd_lock(argv, force):
                 path = f"files/{short_hash(e['url'])}/{name}"
                 mirrors = []
             entry = {"path": path, "url": e["url"], "mirrors": mirrors, "hash": e["hash"]}
+            downloads.append(entry)
             if e["url"] in self_urls:
                 self_files.append(entry)
-            else:
-                downloads.append(entry)
         elif kind in ("git", "hg", "svn", "cvs"):
             request = e["url"] if kind != "cvs" else f"{e['url']} {e['module']}"
             key = checkout_key(kind, request, e.get("ref"))
@@ -741,10 +776,17 @@ def cmd_lock(argv, force):
                 checkout["identifier"] = e["identifier"]
             checkouts.append(checkout)
 
+    packages_here = {i["package"].lower(): i["file"] for i in infos}
     for info in infos:
         own = next((d for d in self_files if d["url"] == info["source"].get("url")), None)
         if own:
-            info["sourceArchive"] = own
+            # The download (in `downloads`) that the source rock holds.
+            info["sourceArchive"] = own["path"]
+        # The rockspecs of this project that this one depends on. The
+        # sandboxed build installs them first, from the project source.
+        info["projectDependencies"] = sorted(
+            packages_here[n] for n in info.pop("dependencyNames") if n in packages_here
+        )
     lock = {
         "version": LOCK_VERSION,
         "lua": opts["lua"],
@@ -815,7 +857,7 @@ def cmd_luarocks(argv):
         config,
         tree=os.path.join(root(), "lua_modules"),
         cache_dir=os.path.join(state, "local-cache"),
-        servers=[os.path.join(cache, "server")],
+        servers=resolve_servers(lock["servers"], root(), offline=os.path.join(cache, "server")),
         external_dirs=externals,
     )
     env = luarocks_env(lock["lua"], config, os.path.join(state, "home"), os.path.join(state, "tmp"), externals)
