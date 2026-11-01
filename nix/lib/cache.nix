@@ -58,15 +58,10 @@ let
   files = builtins.listToAttrs (
     lib.concatMap (
       d:
-      map
-        (url: {
-          name = url;
-          value = "${fetched.${d.path}}";
-        })
-        (
-          [ d.url ]
-          ++ d.mirrors
-        )
+      map (url: {
+        name = url;
+        value = "${fetched.${d.path}}";
+      }) ([ d.url ] ++ d.mirrors)
     ) (lock.serverFiles ++ lock.otherFiles)
   );
 
@@ -86,7 +81,9 @@ let
     else
       map (
         name:
-        lib.attrByPath (lib.splitString "." name) (throw "luarocks-purifier: nixpkgs has no attribute ${name}, which ${toString lockFile} names in externalDeps") pkgs
+        lib.attrByPath (lib.splitString "." name)
+          (throw "luarocks-purifier: nixpkgs has no attribute ${name}, which ${toString lockFile} names in externalDeps")
+          pkgs
       ) lock.externalDeps;
 
   # LuaRocks looks for a C library's headers and libraries under one

@@ -147,6 +147,7 @@ let
       HG = "${luarocks-purifier-shims}/bin/luarocks-purifier-hg",
       SVN = "${luarocks-purifier-shims}/bin/luarocks-purifier-svn",
       CVS = "${luarocks-purifier-shims}/bin/luarocks-purifier-cvs",
+      SSCM = "${luarocks-purifier-shims}/bin/luarocks-purifier-sscm",
     }
     EOF
     }
@@ -243,10 +244,12 @@ let
     let
       r = selfRequest info;
       ref = info.source.ref or null;
-      entry = path: builtins.toJSON {
-        inherit (r) kind url;
-        inherit ref path;
-      };
+      entry =
+        path:
+        builtins.toJSON {
+          inherit (r) kind url;
+          inherit ref path;
+        };
     in
     if r == null then
       ""
@@ -258,13 +261,15 @@ let
     else if r.archive != null then
       ''
         export LUAROCKS_PURIFIER_SELF=${
-          lib.escapeShellArg (builtins.toJSON [
-            {
-              kind = "file";
-              inherit (r) url;
-              path = "${cache.fetched.${r.archive}}";
-            }
-          ])
+          lib.escapeShellArg (
+            builtins.toJSON [
+              {
+                kind = "file";
+                inherit (r) url;
+                path = "${cache.fetched.${r.archive}}";
+              }
+            ]
+          )
         }
       ''
     else if r.md5 != null then
@@ -280,9 +285,7 @@ let
           *.tar.xz|*.txz) tar -cJf "$archive" -C "$TMPDIR/self-archive" ${lib.escapeShellArg r.dir} ;;
           *) tar -czf "$archive" -C "$TMPDIR/self-archive" ${lib.escapeShellArg r.dir} ;;
         esac
-        LUAROCKS_PURIFIER_SELF=$(printf '[{"kind": "file", "url": %s, "path": "%s"}]' ${
-          lib.escapeShellArg (builtins.toJSON r.url)
-        } "$archive")
+        LUAROCKS_PURIFIER_SELF=$(printf '[{"kind": "file", "url": %s, "path": "%s"}]' ${lib.escapeShellArg (builtins.toJSON r.url)} "$archive")
         export LUAROCKS_PURIFIER_SELF
       '';
 

@@ -22,7 +22,7 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     install -Dm644 luarocks-purifier "$out/libexec/luarocks-purifier.py"
-    for tool in curl git hg svn cvs; do
+    for tool in curl git hg svn cvs sscm; do
       makeWrapper ${python3Minimal}/bin/python3 "$out/bin/luarocks-purifier-$tool" \
         --add-flags "$out/libexec/luarocks-purifier.py --tool=$tool"
     done

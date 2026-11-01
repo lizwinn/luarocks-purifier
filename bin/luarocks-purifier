@@ -48,7 +48,7 @@ import tempfile
 LOCK_FILE = "luarocks-purifier.lock.json"
 LOCK_VERSION = 1
 STATE_DIR = ".luarocks-purifier"
-TOOLS = ("curl", "git", "hg", "svn", "cvs")
+TOOLS = ("curl", "git", "hg", "svn", "cvs", "sscm")
 LUA_VERSIONS = ("5.1", "5.2", "5.3", "5.4", "luajit")
 DEFAULT_LUA = "5.4"
 
@@ -317,6 +317,14 @@ def tool_cvs(args):
     return 0
 
 
+def tool_sscm(args):
+    fail(
+        "a rockspec takes its source from Surround SCM (sscm://), which cannot be locked: "
+        "Surround SCM is proprietary, its server needs credentials for every checkout, "
+        "and nixpkgs has no fetcher for it. Publish that rock's source as an archive or in git."
+    )
+
+
 # ---------------------------------------------------------------------------
 # The commands.
 
@@ -375,7 +383,7 @@ def write_config(path, *, tree, cache_dir, servers, external_dirs, arch=None):
         "variables = {",
         '  WGET = "/nonexistent/wget",',
     ]
-    for tool, var in (("curl", "CURL"), ("git", "GIT"), ("hg", "HG"), ("svn", "SVN"), ("cvs", "CVS")):
+    for tool, var in (("curl", "CURL"), ("git", "GIT"), ("hg", "HG"), ("svn", "SVN"), ("cvs", "CVS"), ("sscm", "SSCM")):
         lines.append(f"  {var} = {lua_string(shim(tool))},")
     lines.append("}")
     if arch:
@@ -933,7 +941,14 @@ def main():
         tool = sys.argv[1][len("--tool=") :]
         sys.argv = sys.argv[:1] + sys.argv[2:]
     if tool in TOOLS:
-        return {"curl": tool_curl, "git": tool_git, "hg": tool_hg, "svn": tool_svn, "cvs": tool_cvs}[tool](sys.argv[1:])
+        return {
+            "curl": tool_curl,
+            "git": tool_git,
+            "hg": tool_hg,
+            "svn": tool_svn,
+            "cvs": tool_cvs,
+            "sscm": tool_sscm,
+        }[tool](sys.argv[1:])
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help", "help"):
         print(__doc__ or open(__file__).read().split("\n\n")[1])

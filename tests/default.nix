@@ -15,10 +15,11 @@ let
   # dependency that links a C library from nixpkgs (lua-zlib with zlib), a
   # zip archive (argparse), a GitHub archive (inspect) and a test suite
   # with a test dependency (luaunit).
-  app = (p.buildLuarocksProject {
-    src = ./fixtures/app;
-    doCheck = true;
-  }).packages.app;
+  app =
+    (p.buildLuarocksProject {
+      src = ./fixtures/app;
+      doCheck = true;
+    }).packages.app;
   # lib: a LuaJIT project with two rockspecs, where lib-demo depends on
   # lib, a local rocks server (rocks/) with a git source of rockspec format
   # 3.0 (so with submodules), and the two kinds of own source a source rock
