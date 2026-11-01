@@ -2,13 +2,12 @@
   "checkouts": [
     {
       "identifier": "2017-10-07 08:26:37 -0700_a305d98",
-      "kind": "git",
       "path": "vcs/git/098877d3aab107ee",
       "ref": "v1.2",
       "request": "https://github.com/brimworks/lua-zlib.git"
     }
   ],
-  "contentHash": "sha256-kN3Ii8yrpF/f/mvaJFzidwcd5Nrfvc6Pr1c9uAe92ZE=",
+  "contentHash": "sha256-w6Wf/xjjc2AFlVPevv0ISL9gGCnJVMSWqL9TJrJqeBU=",
   "definitionHash": "sha256-3KVgqCJnrreo9Bxf1O6k3D0QFu5/3xSzTZTOWiJYUTk=",
   "downloads": [
     {
@@ -84,7 +83,6 @@
     "zlib"
   ],
   "lua": "5.4",
-  "luarocks": "3.13.0-1",
   "rockspecs": [
     {
       "file": "app-0.1-1.rockspec",
@@ -115,5 +113,5 @@
       "https://loadk.com/luarocks"
     ]
   ],
-  "version": 3
+  "version": 4
 }

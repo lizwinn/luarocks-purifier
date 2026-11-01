@@ -1,6 +1,6 @@
 {
   "checkouts": [],
-  "contentHash": "sha256-Nx3gdNMwKMFTmTJSDIu69uukNb3LLHukMO5FGEYXQAE=",
+  "contentHash": "sha256-azw+6Ygg+NXPaOnUqpWUjJ93VjOFQXpjzqVQUJDMggE=",
   "definitionHash": "sha256-eNY1TWnTUprQvZ2YBrQrShD1KnHV+f+GODD7BNyRKs0=",
   "downloads": [
     {
@@ -117,7 +117,6 @@
   ],
   "externalDeps": [],
   "lua": "5.4",
-  "luarocks": "3.13.0-1",
   "rockspecs": [
     {
       "file": "luacheck-dev-1.rockspec",
@@ -201,5 +200,5 @@
       "https://loadk.com/luarocks"
     ]
   ],
-  "version": 3
+  "version": 4
 }

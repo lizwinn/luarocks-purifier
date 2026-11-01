@@ -229,7 +229,9 @@ let
             builtins.match "(.*)\\.(tar\\.gz|tgz|tar\\.bz2|tbz2|tar\\.xz|txz|tar|zip|gz|bz2)" basename
             ++ [ basename ]
           ));
-        archive = info.sourceArchive or null;
+        # The locked download of an archive pinned by md5, which the source
+        # rock holds: the lock run downloads it when it exists.
+        archive = if s ? md5 then lib.findFirst (d: d.url == url) null lock.otherFiles else null;
         md5 = s.md5 or null;
       }
     else
@@ -264,7 +266,7 @@ let
               {
                 kind = "file";
                 inherit (r) url;
-                path = "${cache.fetched.${r.archive}}";
+                path = "${cache.fetched.${r.archive.path}}";
               }
             ]
           )

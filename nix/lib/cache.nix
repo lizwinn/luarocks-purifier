@@ -68,9 +68,20 @@ let
     ) (lock.serverFiles ++ lock.otherFiles)
   );
 
+  # The kind of a checkout is the kind key of its download entry.
+  checkoutKind =
+    c:
+    builtins.head (
+      builtins.filter (k: lock.downloadsByPath.${c.path} ? ${k}) [
+        "git"
+        "hg"
+        "svn"
+        "cvs"
+      ]
+    );
   checkouts = builtins.listToAttrs (
     map (c: {
-      name = "${c.kind} ${c.request} ${if c.ref == null then "" else c.ref}";
+      name = "${checkoutKind c} ${c.request} ${if c.ref == null then "" else c.ref}";
       value = {
         path = "${fetched.${c.path}}";
         identifier = c.identifier or null;

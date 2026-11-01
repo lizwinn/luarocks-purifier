@@ -51,7 +51,7 @@ import sys
 import tempfile
 
 LOCK_FILE = "luarocks-purifier.lock.json"
-LOCK_VERSION = 3
+LOCK_VERSION = 4
 # The lockfile the commands read and write: LOCK_FILE in the project root,
 # or the path given with --lockfile.
 lock_path_given = None
@@ -820,8 +820,6 @@ def cmd_lock(argv):
     submodule_dirs = {e["dir"] for e in events if e["kind"] == "git-submodules"}
 
     downloads, checkouts, seen = [], [], set()
-    self_urls = {i["source"].get("url") for i in infos if i["source"].get("md5")}
-    self_files = []
     for e in events:
         kind = e["kind"]
         if kind == "file":
@@ -838,8 +836,6 @@ def cmd_lock(argv):
                 mirrors = []
             entry = {"path": path, "url": e["url"], "mirrors": mirrors, "hash": e["hash"]}
             downloads.append(entry)
-            if e["url"] in self_urls:
-                self_files.append(entry)
         elif kind in ("git", "hg", "svn", "cvs"):
             request = e["url"] if kind != "cvs" else f"{e['url']} {e['module']}"
             key = checkout_key(kind, request, e.get("ref"))
@@ -886,17 +882,13 @@ def cmd_lock(argv):
                     "hash": prefetch(kind, e, False),
                 }
             downloads.append(entry)
-            checkout = {"kind": kind, "request": request, "ref": e.get("ref"), "path": path}
+            checkout = {"request": request, "ref": e.get("ref"), "path": path}
             if e.get("identifier"):
                 checkout["identifier"] = e["identifier"]
             checkouts.append(checkout)
 
     packages_here = {i["package"].lower(): i["file"] for i in infos}
     for info in infos:
-        own = next((d for d in self_files if d["url"] == info["source"].get("url")), None)
-        if own:
-            # The download (in `downloads`) that the source rock holds.
-            info["sourceArchive"] = own["path"]
         # The rockspecs of this project that this one depends on. The
         # sandboxed build installs them first, from the project source.
         info["projectDependencies"] = sorted(
@@ -905,7 +897,6 @@ def cmd_lock(argv):
     lock = {
         "version": LOCK_VERSION,
         "lua": opts["lua"],
-        "luarocks": luarocks_pkg["version"],
         "servers": opts["servers"],
         "externalDeps": opts["externalDeps"],
         "definitionHash": defn,

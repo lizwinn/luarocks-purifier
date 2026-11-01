@@ -2,13 +2,12 @@
   "checkouts": [
     {
       "identifier": "2022-03-18 13:49:10 +0100_691eea1",
-      "kind": "git",
       "path": "vcs/git/88fa2d3a756febf8",
       "ref": "v3.1.3",
       "request": "https://github.com/kikito/inspect.lua.git"
     }
   ],
-  "contentHash": "sha256-ud/Tvyf+TCSDWETWBcXFHn4HuoGJsLaqrJcFTGqe2gk=",
+  "contentHash": "sha256-mVXhJ8U/hbtEyOEU8IERjEBYzHdveqcj3heD7N+YFJ0=",
   "definitionHash": "sha256-flzI4uZsaziVI6hcQWiT2gVItcdWA1GA6R/brCUkilk=",
   "downloads": [
     {
@@ -46,7 +45,6 @@
   ],
   "externalDeps": [],
   "lua": "luajit",
-  "luarocks": "3.13.0-1",
   "rockspecs": [
     {
       "file": "lib-1.0-1.rockspec",
@@ -86,7 +84,6 @@
         "md5": "3393e3336b47dade24e0f273c6ae4ddb",
         "url": "https://github.com/luarocks/argparse/archive/0.7.1.zip"
       },
-      "sourceArchive": "files/fd26d0877d80fa7a/0.7.1.zip",
       "tests": false,
       "version": "1.0-1"
     }
@@ -101,5 +98,5 @@
       "https://loadk.com/luarocks"
     ]
   ],
-  "version": 3
+  "version": 4
 }

@@ -1,25 +1,22 @@
 {
   "checkouts": [
     {
-      "kind": "cvs",
       "path": "vcs/cvs/cvsrock",
       "ref": "REL_1_0",
       "request": ":pserver:anonymous@cvs.example.org:/cvsroot cvsrock"
     },
     {
-      "kind": "hg",
       "path": "vcs/hg/hgrock",
       "ref": "1.0",
       "request": "https://hg.example.org/hgrock"
     },
     {
-      "kind": "svn",
       "path": "vcs/svn/svnrock",
       "ref": "5",
       "request": "svn.example.org/svnrock"
     }
   ],
-  "contentHash": "sha256-CP2jOqI0063eVnoy5rxe9HgRHnj8Jyi83/2C0ShHVPQ=",
+  "contentHash": "sha256-jNF+8G3vLzUwnBaCFkzAHsaj7eLsA5q/x9BGoShPr10=",
   "definitionHash": "sha256-Zjw8yrsitarDHZMEKOcREdxwxHsFrX+h4YTs0FRAr5g=",
   "downloads": [
     {
@@ -54,7 +51,6 @@
   ],
   "externalDeps": [],
   "lua": "5.4",
-  "luarocks": "3.13.0-1",
   "rockspecs": [
     {
       "file": "vcs-1.0-1.rockspec",
@@ -80,5 +76,5 @@
       "rocks"
     ]
   ],
-  "version": 3
+  "version": 4
 }
