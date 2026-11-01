@@ -83,11 +83,11 @@ let
   isFile = d: d ? url;
 in
 assert
-  builtins.all (r: builtins.pathExists (src + "/${r.file}")) (if src == null then [ ] else lock.rockspecs)
+  builtins.all (r: builtins.pathExists (src + "/${r.file}")) (
+    if src == null then [ ] else lock.rockspecs
+  )
   || fail "names a rockspec that the project source does not have.";
-assert
-  current
-  || fail "is out of date: a rockspec or luarocks.lock changed since the lock run.";
+assert current || fail "is out of date: a rockspec or luarocks.lock changed since the lock run.";
 lock
 // {
   inherit storeName;
