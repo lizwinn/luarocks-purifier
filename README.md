@@ -122,8 +122,7 @@ lets `luarocks make` resolve the rocks again within the constraints of the
 rockspecs, writes the result to `luarocks.lock`, and then locks.
 
 A lock of an unchanged project reproduces the lockfile byte for byte, as
-long as the rocks servers serve the same files. For luacheck, a relock
-takes about 40 seconds.
+long as the rocks servers serve the same files.
 
 Every command takes `--lockfile PATH` before its other arguments, for a
 lockfile outside the project root.
@@ -140,7 +139,7 @@ the locked files and C libraries, and `tools` holds luarocks-purifier with
 its LuaRocks, Lua, C compiler and nixpkgs. `prefetch` also installs the
 dependencies and test dependencies of every rockspec into `lua_modules`.
 After it, `luarocks-purifier luarocks make` and `luarocks-purifier luarocks
-test` work with the network cut off, and CI checks that they do.
+test` work with the network cut off.
 
 ## Editor
 
@@ -204,10 +203,9 @@ These are refused or limited:
   checkout, and nixpkgs has no fetcher for it.
 - A CVS source without a tag stops the lock run, because nothing would pin
   its content.
-- CVS sources lock and build on x86_64-linux only. On aarch64-linux, the CVS
-  of nixpkgs aborts on every export and checkout, which both the lock run
-  and nixpkgs' `fetchcvs` make: the copy of gnulib's `vasnprintf` that CVS
-  bundles receives a corrupted string argument there.
+- CVS sources lock and build on x86_64-linux only, because the CVS package
+  of nixpkgs aborts on aarch64-linux, both in the lock run and in
+  `fetchcvs`.
 - A rock whose build downloads files itself, past LuaRocks (for instance
   with a CMake `ExternalProject`), fails in the sandbox: LuaRocks does not
   see those downloads, so the lock run cannot record them.
@@ -216,17 +214,59 @@ These are refused or limited:
 
 ## Examples
 
-CI locks and builds real projects as examples of luarocks-purifier at work.
-The examples are not a list of the projects it has been tried on or works
-with.
+### Package luacheck
 
-[luacheck](https://github.com/lunarmodules/luacheck) v1.2.0 is a Lua linter
-with a busted test suite. The flake check `real-luacheck` builds it,
-unchanged, from a lockfile kept outside its source, and runs it on its own
-source. The CI job `real-luacheck` adds the three test dependencies that
-luacheck's own CI installs by hand (`lanes`, `luautf8` and `luasocket`) to
-its rockspec, locks it, runs its 460 specs in the sandbox, prefetches, and
-runs them again with `luarocks test` with the network cut off.
+[luacheck](https://github.com/lunarmodules/luacheck) is a Lua linter. Its
+authors do not use luarocks-purifier, so this example keeps the lockfile in
+a flake of its own, beside a checkout of luacheck. Clone the release, make
+a directory for the flake, and lock luacheck into it:
+
+```zsh
+git clone --branch v1.2.0 https://github.com/lunarmodules/luacheck
+mkdir luacheck-nix
+cd luacheck
+nix run github:nix-purifiers/luarocks-purifier -- lock --lockfile ../luacheck-nix/luarocks-purifier.lock.json
+```
+
+The lockfile records every rock luacheck needs, with a hash for each. Then
+write `luacheck-nix/flake.nix`, with luacheck as an input that is not a
+flake:
+
+```nix
+{
+  inputs.luarocks-purifier.url = "github:nix-purifiers/luarocks-purifier";
+  inputs.nixpkgs.follows = "luarocks-purifier/nixpkgs";
+  inputs.luacheck = {
+    url = "github:lunarmodules/luacheck/v1.2.0";
+    flake = false;
+  };
+
+  outputs = { nixpkgs, luarocks-purifier, luacheck, ... }: {
+    packages.x86_64-linux.default =
+      (luarocks-purifier.lib.luarocks-purifier.buildLuarocksProject {
+        pkgs = nixpkgs.legacyPackages.x86_64-linux;
+        src = luacheck;
+        lockFile = ./luarocks-purifier.lock.json;
+      }).packages.luacheck;
+  };
+}
+```
+
+Build it and run it:
+
+```zsh
+cd ../luacheck-nix
+nix run path:. -- --version
+```
+
+To work on luacheck itself, run the everyday commands in the checkout, and
+name the lockfile that lies outside it:
+
+```zsh
+cd ../luacheck
+nix run github:nix-purifiers/luarocks-purifier -- prefetch --lockfile ../luacheck-nix/luarocks-purifier.lock.json
+nix run github:nix-purifiers/luarocks-purifier -- luarocks --lockfile ../luacheck-nix/luarocks-purifier.lock.json make
+```
 
 ## Credits
 
