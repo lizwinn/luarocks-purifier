@@ -69,6 +69,7 @@
     },
     {
       "git": {
+        "commitObject": null,
         "leaveDotGit": false,
         "rev": "a305d98f473d0a253b6fd740ce60d7d5a5f1cda0",
         "submodules": false,

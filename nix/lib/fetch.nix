@@ -6,9 +6,10 @@
 #   { path, url, mirrors, hash }
 #     a file, where hash is the SRI hash of the file, fetched from url or
 #     from one of the mirrors, which serve the same bytes
-#   { path, git = { url, rev, submodules, leaveDotGit }, hash }
+#   { path, git = { url, rev, submodules, leaveDotGit, commitObject }, hash }
 #     a git checkout, where hash is the SRI hash that nix-prefetch-git
-#     reports for it
+#     reports for it; LuaRocks deletes .git, so leaveDotGit is false and
+#     commitObject is null in every entry the lock run writes
 #   { path, hg = { url, rev }, hash }
 #   { path, svn = { url, rev }, hash }
 #     a Mercurial or Subversion checkout, fetched with nixpkgs' fetchhg or

@@ -764,7 +764,11 @@ def cmd_lock(argv, force):
                         "url": https_git_url(e["url"]),
                         "rev": e["rev"],
                         "submodules": submodules,
+                        # LuaRocks deletes .git after the checkout, so no
+                        # git entry needs it, nor the commit object that the
+                        # shared library rebuilds .git from.
                         "leaveDotGit": False,
+                        "commitObject": None,
                     },
                     "hash": prefetch("git", e, submodules),
                 }
