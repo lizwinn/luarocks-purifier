@@ -383,9 +383,12 @@ EOF
   nix build --no-link --impure --expr "
     let
       flake = builtins.getFlake \"path:$repo\";
-      pkgs = import flake.inputs.nixpkgs { system = \"$system\"; };
+      pkgs = import flake.inputs.nixpkgs {
+        system = \"$system\";
+        overlays = [ flake.overlays.default ];
+      };
     in
-    (flake.lib.luarocks-purifier.buildLuarocksProject { inherit pkgs; src = $work/luacheck; }).tests"
+    (pkgs.buildLuarocksProject { src = $work/luacheck; }).tests"
   "$cli" prefetch
   offline "$cli" luarocks make
   offline "$cli" luarocks test 2>&1 | tee test.log
