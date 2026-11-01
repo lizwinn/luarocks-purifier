@@ -113,7 +113,7 @@ EOF
   "$cli" luarocks --version > /dev/null
   nix eval --impure --expr "
     let
-      flake = builtins.getFlake \"path:$repo\";
+      flake = builtins.getFlake \"git+file://$repo\";
       inMemory = flake.lib.luarocks-purifier.readLock { src = $work/update; };
     in
     assert inMemory.problems == [ ]; true" > /dev/null
@@ -218,6 +218,27 @@ EOF
     "$cli" lock --lockfile "$work/external.lock.json"
     test ! -e luarocks-purifier.lock.json
     cmp "$repo/tests/fixtures/app/luarocks-purifier.lock.json" "$work/external.lock.json"
+  )
+
+  step "a luarocks.lock outside the project"
+  fixture app toollock
+  (
+    cd "$work/toollock"
+    mv luarocks-purifier.lock.json "$work/toollock.lock.json"
+    cp luarocks.lock "$work/tree-copy.lock"
+    mkdir "$work/outside"
+    # `update` writes luarocks.lock at the path it is given, starting from
+    # the copy in the project, and leaves that copy as it is.
+    "$cli" update --lockfile "$work/toollock.lock.json" --tool-lockfile "$work/outside/luarocks.lock"
+    cmp luarocks.lock "$work/tree-copy.lock"
+    test -s "$work/outside/luarocks.lock"
+    # The lockfiles are current for the project and the outside copy, even
+    # once the copy in the project differs.
+    echo "-- changed" >> luarocks.lock
+    "$cli" luarocks --lockfile "$work/toollock.lock.json" --tool-lockfile "$work/outside/luarocks.lock" --version > /dev/null
+    # The environment variables name the same paths.
+    LUAROCKS_PURIFIER_LOCKFILE="$work/toollock.lock.json" LUAROCKS_PURIFIER_TOOL_LOCKFILE="$work/outside/luarocks.lock" \
+      "$cli" luarocks --version > /dev/null
   )
 }
 
@@ -382,13 +403,13 @@ EOF
   "$cli" lock
   nix build --no-link --impure --expr "
     let
-      flake = builtins.getFlake \"path:$repo\";
+      flake = builtins.getFlake \"git+file://$repo\";
       pkgs = import flake.inputs.nixpkgs {
         system = \"$system\";
         overlays = [ flake.overlays.default ];
       };
     in
-    (pkgs.buildLuarocksProject { src = $work/luacheck; }).tests"
+    (pkgs.luarocks-purifier.buildLuarocksProject { src = $work/luacheck; }).tests"
   "$cli" prefetch
   offline "$cli" luarocks make
   offline "$cli" luarocks test 2>&1 | tee test.log

@@ -4,14 +4,17 @@
 # the Nix sandbox, from its luarocks-purifier lockfile.
 #
 # The file is a package for callPackage: the first argument set is what it
-# takes from the package set, and the result is the builder. The overlay
-# `overlays.default` of this flake adds it to the package set as
-# `buildLuarocksProject`, so a package written for callPackage takes it like
-# any other builder:
+# takes from the scope, and the result is the builder. The overlay
+# `overlays.default` of this flake adds the scope `luarocks-purifier`, which
+# holds the builder, so a package written for callPackage takes the scope by
+# name:
 #
-#   { buildLuarocksProject }: (buildLuarocksProject { src = ./.; }).packages.app
+#   { luarocks-purifier }:
+#   (luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.app
 #
-# and `buildLuarocksProject.override` replaces what it takes from the set.
+# `luarocks-purifier.buildLuarocksProject.override` replaces what the
+# builder takes, and `luarocks-purifier.overrideScope` replaces what the
+# scope shares.
 #
 # The builder's arguments:
 #
@@ -19,8 +22,8 @@
 #   lockFile      the lockfile; the default is src's
 #                 luarocks-purifier.lock.json. A lockfile outside src
 #                 replaces any copy in it.
-#   luarocksLock  LuaRocks' own lockfile (luarocks.lock), for a src that
-#                 holds none; it replaces any copy in src
+#   luarocksLock  LuaRocks' own lockfile (luarocks.lock); the default is the
+#                 copy in src. A copy kept outside src takes its place.
 #   externalDeps  the C libraries the rocks need, as a list of packages; the
 #                 default is the nixpkgs attributes the lockfile names
 #   fetchers      fetchers that replace those of nixpkgs for the locked
@@ -54,7 +57,17 @@
   runCommand,
   linkFarm,
   symlinkJoin,
+  writeText,
+  # The fetchers for the locked downloads, and the packages that
+  # `fetchEntry` of the shared library unpacks and checks them with.
+  fetchurl,
+  fetchgit,
+  fetchhg,
+  fetchsvn,
+  fetchcvs,
   unzip,
+  zstd,
+  python3,
   zip,
   gnutar,
   gzip,
@@ -62,11 +75,12 @@
   xz,
   cmake,
   gnumake,
-  # The luarocks-purifier package scope, whose `shims` stand in for the
-  # tools LuaRocks runs.
-  luarocks-purifier,
-  # The `purifier` namespace of the shared nix-purifiers library.
-  purifier,
+  # The tool stand-ins that LuaRocks runs in place of curl, git and the
+  # other fetching tools (pkgs/shims).
+  shims,
+  # The `purifier` namespace of the shared nix-purifiers library, which the
+  # default package overlay gives.
+  purifier ? throw "luarocks-purifier: the builder needs `purifier`, which the default package overlay of this flake gives",
 }:
 {
   src,
@@ -76,7 +90,7 @@
   fetchers ? { },
 }:
 let
-  luarocks-purifier-shims = luarocks-purifier.shims;
+  luarocks-purifier-shims = shims;
 
   cache = callPackage ./cache.nix {
     projectSource = cleanSource;
@@ -86,6 +100,16 @@ let
       externalDeps
       purifier
       fetchers
+      fetchurl
+      fetchgit
+      fetchhg
+      fetchsvn
+      fetchcvs
+      runCommand
+      unzip
+      zstd
+      python3
+      writeText
       ;
   };
   inherit (cache) lock luarocks externals;

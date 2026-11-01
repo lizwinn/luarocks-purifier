@@ -38,14 +38,15 @@ options are saved in the lockfile, and a later `lock` reuses them:
 | `--external-dep ATTR` | A nixpkgs attribute that provides a C library a rock needs, such as `zlib` or `openssl` (repeatable). |
 | `--rockspec FILE` | A rockspec of the project (repeatable). The default is every `*.rockspec` in the project root. |
 
-The flake's `overlays.default` adds `buildLuarocksProject` to a package set,
-where nixpkgs keeps its own builders. A package written for `callPackage`
-takes it by name:
+The flake's `overlays.default` adds one attribute to a package set: the
+scope `luarocks-purifier`. The scope holds the builder
+`buildLuarocksProject`, the command `cli` and the tool stand-ins `shims`. A
+package written for `callPackage` takes the scope by name:
 
 ```nix
 # package.nix
-{ buildLuarocksProject }:
-(buildLuarocksProject { src = ./.; }).packages.app
+{ luarocks-purifier }:
+(luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.app
 ```
 
 ```nix
@@ -66,14 +67,20 @@ takes it by name:
 }
 ```
 
-`buildLuarocksProject.override` replaces any package the builder takes from
-the package set. The builder takes these arguments:
+`luarocks-purifier.buildLuarocksProject.override` replaces any package the
+builder takes, and `luarocks-purifier.overrideScope` replaces what everything
+in the scope shares.
+
+We recommend committing both lockfiles to the project's repository:
+`luarocks-purifier.lock.json`, and `luarocks.lock` when the project has one.
+The builder and the commands look for them in the project by default. The
+builder takes these arguments:
 
 | Argument | Meaning |
 |---|---|
 | `src` | The project root. |
-| `lockFile` | The lockfile. The default is `luarocks-purifier.lock.json` in `src`. A lockfile outside `src` replaces any copy in it, so a packaging flake can build a project whose author does not use luarocks-purifier. |
-| `luarocksLock` | LuaRocks' own lockfile, `luarocks.lock`, for a `src` that holds none. It replaces any copy in `src`. |
+| `lockFile` | The lockfile. The default is `luarocks-purifier.lock.json` in `src`. A lockfile outside `src` takes the place of any copy in it. |
+| `luarocksLock` | LuaRocks' own lockfile, `luarocks.lock`. The default is the copy in `src`. A copy kept outside `src` takes its place. |
 | `externalDeps` | The C libraries the rocks need, as a list of packages. The default is the nixpkgs attributes the lockfile names. |
 | `fetchers` | Fetchers that replace those of nixpkgs for the locked downloads, by name: `fetchurl`, `fetchgit`, `fetchhg`, `fetchsvn` and `fetchcvs`. A company mirror or credentials go into `fetchers.fetchurl`. The shared [purifier](https://github.com/nix-purifiers/purifier) library calls each with the arguments of the nixpkgs fetcher of the same name. |
 
@@ -138,10 +145,14 @@ rockspecs, writes the result to `luarocks.lock`, and then locks.
 A lock of an unchanged project reproduces the lockfile byte for byte, as
 long as the rocks servers serve the same files.
 
-Every command takes `--lockfile PATH` before its other arguments, for a
-lockfile outside the project root. The environment variable
-`LUAROCKS_PURIFIER_LOCKFILE` names the same path, and `--lockfile` takes
-precedence over it.
+A project can keep its lockfiles outside its repository, as the last
+subsection of Examples shows. Every command then takes `--lockfile PATH` before its
+other arguments, and `--tool-lockfile PATH` for `luarocks.lock`. The
+environment variables `LUAROCKS_PURIFIER_LOCKFILE` and
+`LUAROCKS_PURIFIER_TOOL_LOCKFILE` name the same paths, and the options take
+precedence over them. With `--tool-lockfile`, `update` writes `luarocks.lock`
+there and leaves the copy in the project as it is, and the commands start
+from the copy in the project until the outside one exists.
 
 ## Working offline
 
@@ -237,21 +248,73 @@ Limits:
 
 ### Package luacheck
 
-[luacheck](https://github.com/lunarmodules/luacheck) is a Lua linter. Its
-authors do not use luarocks-purifier, so this example keeps the lockfile in
-a flake of its own, beside a checkout of luacheck. Clone the release, make
-a directory for the flake, and lock luacheck into it:
+[luacheck](https://github.com/lunarmodules/luacheck) is a Lua linter. Clone
+the release you want to package, and lock it:
 
 ```zsh
 git clone --branch v1.2.0 https://github.com/lunarmodules/luacheck
+cd luacheck
+nix run github:nix-purifiers/luarocks-purifier -- lock
+```
+
+The lockfile `luarocks-purifier.lock.json` records every rock luacheck
+needs, with a hash for each. Write `package.nix` and `flake.nix` in the
+checkout:
+
+```nix
+# package.nix
+{ luarocks-purifier }:
+(luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.luacheck
+```
+
+```nix
+# flake.nix
+{
+  inputs.luarocks-purifier.url = "github:nix-purifiers/luarocks-purifier";
+  inputs.nixpkgs.follows = "luarocks-purifier/nixpkgs";
+
+  outputs = { nixpkgs, luarocks-purifier, ... }:
+    let
+      pkgs = import nixpkgs {
+        system = "x86_64-linux";
+        overlays = [ luarocks-purifier.overlays.default ];
+      };
+    in
+    {
+      packages.x86_64-linux.default = pkgs.callPackage ./package.nix { };
+    };
+}
+```
+
+Add the files to git, because a flake sees only the files git tracks, then
+build luacheck and run it:
+
+```zsh
+git add package.nix flake.nix luarocks-purifier.lock.json
+nix run . -- --version
+```
+
+To work on luacheck, run the development commands in the checkout:
+
+```zsh
+nix run github:nix-purifiers/luarocks-purifier -- prefetch
+nix run github:nix-purifiers/luarocks-purifier -- luarocks make
+```
+
+### Keep the lockfiles outside the repository
+
+A flake can also package a project whose repository stays as published, with
+no luarocks-purifier files in it. The flake keeps the lockfile next to its
+own `flake.nix`, and takes luacheck as an input that is not a flake. Lock
+from a checkout, and name the lockfile with `--lockfile`:
+
+```zsh
 mkdir luacheck-nix
 cd luacheck
 nix run github:nix-purifiers/luarocks-purifier -- lock --lockfile ../luacheck-nix/luarocks-purifier.lock.json
 ```
 
-The lockfile records every rock luacheck needs, with a hash for each. Then
-write `luacheck-nix/flake.nix`, with luacheck as an input that is not a
-flake:
+Then `luacheck-nix/flake.nix` passes the lockfile to the builder:
 
 ```nix
 {
@@ -271,7 +334,7 @@ flake:
     in
     {
       packages.x86_64-linux.default =
-        (pkgs.buildLuarocksProject {
+        (pkgs.luarocks-purifier.buildLuarocksProject {
           src = luacheck;
           lockFile = ./luarocks-purifier.lock.json;
         }).packages.luacheck;
@@ -279,18 +342,10 @@ flake:
 }
 ```
 
-Build it and run it:
+Build it with `nix run path:. -- --version` in `luacheck-nix`. In the
+checkout, the development commands name the same lockfile:
 
 ```zsh
-cd ../luacheck-nix
-nix run path:. -- --version
-```
-
-To work on luacheck itself, run the development commands in the checkout,
-and name the lockfile that lies outside it:
-
-```zsh
-cd ../luacheck
 nix run github:nix-purifiers/luarocks-purifier -- prefetch --lockfile ../luacheck-nix/luarocks-purifier.lock.json
 nix run github:nix-purifiers/luarocks-purifier -- luarocks --lockfile ../luacheck-nix/luarocks-purifier.lock.json make
 ```

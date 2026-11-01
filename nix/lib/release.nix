@@ -5,6 +5,8 @@
 {
   src,
   lockFile,
+  # The path of luarocks.lock when it lies outside src, or null.
+  luarocksLock ? null,
   # The nixpkgs the CLI was built with.
   nixpkgs,
   # The shared nix-purifiers library the CLI was built with, as a flake
@@ -14,8 +16,8 @@
 let
   pkgs = import nixpkgs { };
   buildLuarocksProject = pkgs.callPackage ./build-luarocks-project.nix {
-    luarocks-purifier.shims = pkgs.callPackage ../../pkgs/shims { };
+    shims = pkgs.callPackage ../../pkgs/shims { };
     inherit ((builtins.getFlake purifierFlake).lib) purifier;
   };
 in
-(buildLuarocksProject { inherit src lockFile; }).release
+(buildLuarocksProject { inherit src lockFile luarocksLock; }).release

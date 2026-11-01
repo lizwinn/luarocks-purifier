@@ -6,7 +6,8 @@
 # real-world project luacheck.
 {
   pkgs,
-  # The default package overlay of this flake, which adds buildLuarocksProject.
+  # The default package overlay of this flake, which adds the scope
+  # luarocks-purifier.
   overlay,
   # lib.luarocks-purifier.readLock of this flake.
   readLock,
@@ -16,7 +17,7 @@
 }:
 let
   inherit (pkgs) lib;
-  build = (pkgs.extend overlay).buildLuarocksProject;
+  build = (pkgs.extend overlay).luarocks-purifier.buildLuarocksProject;
   contentHash = import ../nix/lib/content-hash.nix;
 
   # app: a rock with a command, Lua modules, a C dependency (lpeg), a git
@@ -131,19 +132,32 @@ in
     '';
 
   # The app fixture built from a lockfile kept outside its source, which
-  # holds no luarocks-purifier lockfile.
+  # holds no luarocks-purifier lockfile, and from a source that holds
+  # neither lockfile, with luarocks.lock kept outside it too.
   conformance-external =
     let
-      external = build {
-        src = lib.fileset.toSource {
+      withoutLockfiles =
+        files:
+        lib.fileset.toSource {
           root = ./fixtures/app;
-          fileset = lib.fileset.difference ./fixtures/app ./fixtures/app/luarocks-purifier.lock.json;
+          fileset = lib.fileset.difference ./fixtures/app (lib.fileset.unions files);
         };
+      external = build {
+        src = withoutLockfiles [ ./fixtures/app/luarocks-purifier.lock.json ];
         lockFile = ./fixtures/app/luarocks-purifier.lock.json;
+      };
+      externalToolLock = build {
+        src = withoutLockfiles [
+          ./fixtures/app/luarocks-purifier.lock.json
+          ./fixtures/app/luarocks.lock
+        ];
+        lockFile = ./fixtures/app/luarocks-purifier.lock.json;
+        luarocksLock = ./fixtures/app/luarocks.lock;
       };
     in
     pkgs.runCommand "conformance-external" { } ''
       ${external.packages.app.bin.app} "a b a" | grep -q 'a = 2'
+      ${externalToolLock.packages.app.bin.app} "a b a" | grep -q 'a = 2'
       touch $out
     '';
 

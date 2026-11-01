@@ -16,21 +16,26 @@
       inherit (libOverlays) default;
     };
 
-    # The packages are the `default` entry of this flake's package overlay
-    # registry (pkg-overlays/): the package set applies it by default, and
-    # the flake exports it as `pkgOverlays` and as the plain
-    # `overlays.default`.
+    # The scope `luarocks-purifier` is the `default` entry of this flake's
+    # package overlay registry (pkg-overlays/): the package set applies it by
+    # default, and the flake exports it as `pkgOverlays` and as the plain
+    # `overlays.default`. The scope holds the builder, which is a function
+    # and not a package, so the flake exports the derivations of the scope
+    # itself (see `packages` below).
     nixpkgs = {
-      packages.export.enabled = true;
+      packages.export.enabled = false;
     };
   };
 
-  # `nix run github:nix-purifiers/luarocks-purifier -- lock` locks the
-  # project in the current directory.
+  # The packages of the flake are the derivations of the scope, and
+  # `nix run github:nix-purifiers/luarocks-purifier -- lock` runs the command
+  # `cli` to lock the project in the current directory.
   perSystem =
-    { config, ... }:
+    { pkgs, ... }:
     {
-      packages.default = config.packages.cli;
+      packages = lib.filterAttrs (_: lib.isDerivation) pkgs.luarocks-purifier // {
+        default = pkgs.luarocks-purifier.cli;
+      };
     };
 
   partitionedAttrs.checks = "checks";

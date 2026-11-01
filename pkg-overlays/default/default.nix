@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: MIT
 #
-# The default package overlay. It adds the packages of pkgs/ under
-# `pkgs.luarocks-purifier` (`.cli`, `.shims`), and the builder
-# `pkgs.buildLuarocksProject` (nix/lib/build-luarocks-project.nix) beside
-# them, where nixpkgs keeps its own builders, so a package written for
-# callPackage takes it by name. A consumer that lists this flake in
-# `projects` holds it as `luarocks-purifier/default`, which its package
-# sets apply by default.
+# The default package overlay. It adds one attribute to the package set:
+# the scope `pkgs.luarocks-purifier`, made with lib.makeScope from pkgs/. The
+# scope holds the builder `buildLuarocksProject`
+# (nix/lib/build-luarocks-project.nix), the command `cli` and the tool
+# stand-ins `shims`. A package written for callPackage takes the scope by
+# name, and `luarocks-purifier.overrideScope` replaces what the scope shares.
 #
-# The builder fetches with the shared nix-purifiers library
-# (github:nix-purifiers/purifier). The CLI loads the same library in its
-# own Nix builds, from the locked source of this flake's `purifier` input.
+# The overlay gives the builder the shared nix-purifiers library
+# (github:nix-purifiers/purifier), which it fetches with, and gives the
+# command a flake reference to the library's locked source, which the command
+# loads in its own Nix builds.
+#
+# A consumer that lists this flake in `projects` holds the overlay as
+# `luarocks-purifier/default`, which its package sets apply by default.
 { closure-inputs, closure-lib, ... }:
 let
   packages = closure-lib.caisson.nixpkgs.mkPackagesOverlay ../../pkgs "luarocks-purifier";
@@ -25,11 +28,11 @@ in
     in
     base
     // {
-      luarocks-purifier = base.luarocks-purifier // {
-        cli = base.luarocks-purifier.cli.override { inherit purifierFlake; };
-      };
-      buildLuarocksProject = final.callPackage ../../nix/lib/build-luarocks-project.nix {
-        inherit (closure-lib) purifier;
-      };
+      luarocks-purifier = base.luarocks-purifier.overrideScope (
+        _: super: {
+          cli = super.cli.override { inherit purifierFlake; };
+          buildLuarocksProject = super.buildLuarocksProject.override { inherit (closure-lib) purifier; };
+        }
+      );
     };
 }

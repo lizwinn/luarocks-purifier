@@ -25,6 +25,15 @@
   symlinkJoin,
   unzip,
   zip,
+  zstd,
+  python3,
+  # The fetchers for the locked downloads; `fetchers` below replaces any of
+  # them.
+  fetchurl,
+  fetchgit,
+  fetchhg,
+  fetchsvn,
+  fetchcvs,
   # The `purifier` namespace of the shared nix-purifiers library
   # (github:nix-purifiers/purifier), whose fetchEntry fetches each entry.
   purifier,
@@ -48,7 +57,23 @@ let
     inherit lockFile luarocksLock purifier;
     src = projectSource;
   };
-  fetch = purifier.fetchEntry ({ inherit pkgs; } // fetchers);
+  fetch = purifier.fetchEntry (
+    {
+      inherit
+        fetchurl
+        fetchgit
+        fetchhg
+        fetchsvn
+        fetchcvs
+        runCommand
+        unzip
+        zstd
+        python3
+        writeText
+        ;
+    }
+    // fetchers
+  );
   luarocks = (import ./lua.nix { inherit pkgs; }).${lock.lua}.pkgs.luarocks;
 
   # The downloads of the lock in memory for this system, which are all of
