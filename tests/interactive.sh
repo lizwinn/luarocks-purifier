@@ -132,6 +132,13 @@ mkdir -p "$vcs"
   cvs -Q -d "$vcs/cvsroot" import -m init cvsrock vendor start
   cd "$vcs" && cvs -Q -d "$vcs/cvsroot" rtag REL_1_0 cvsrock
 )
+(
+  # The tagged export the lock run makes, run here first so that a failure
+  # shows what CVS reports.
+  mkdir "$vcs/probe" && cd "$vcs/probe"
+  cvs -d "$vcs/cvsroot" export -r REL_1_0 cvsrock
+  test -f cvsrock/cvsrock.lua
+)
 project=$work/vcs-project
 mkdir -p "$project/rocks"
 for rock in hgrock svnrock cvsrock; do
