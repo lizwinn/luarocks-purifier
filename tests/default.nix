@@ -258,7 +258,8 @@ in
   lib-release = pkgs.runCommand "lib-release" { nativeBuildInputs = [ pkgs.unzip ]; } ''
     unzip -l ${libProject.release}/lib-1.0-1.src.rock | tee lib
     grep -q 'lib-1.0.tar.gz' lib
-    unzip -p ${libProject.release}/lib-1.0-1.src.rock lib-1.0.tar.gz | tar -tzf - | grep -q 'lib-1.0/src/lib.lua'
+    unzip -p ${libProject.release}/lib-1.0-1.src.rock lib-1.0.tar.gz | tar -tzf - > archive-files
+    grep -Fx 'lib-1.0/src/lib.lua' archive-files
     unzip -l ${libProject.release}/lib-demo-1.0-1.src.rock | tee demo
     grep -q '0.7.1.zip' demo
     touch $out
