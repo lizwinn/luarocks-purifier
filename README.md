@@ -104,7 +104,8 @@ builder directly:
 
 ```nix
 {
-  inputs.luarocks-purifier.url = "github:nix-purifiers/luarocks-purifier";
+  inputs.luarocks-purifier.url =
+    "github:nix-purifiers/luarocks-purifier";
   inputs.nixpkgs.follows = "luarocks-purifier/nixpkgs";
 
   outputs =
@@ -112,13 +113,16 @@ builder directly:
     let
       pkgs = import nixpkgs {
         system = "x86_64-linux";
-        overlays = [ luarocks-purifier.overlays.default ];
+        overlays = [
+          luarocks-purifier.overlays.default
+        ];
       };
     in
     {
       packages.x86_64-linux.default =
-        (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; })
-        .packages.app;
+        (pkgs.luarocks-purifier.buildLuarocksProject {
+          src = ./.;
+        }).packages.app;
     };
 }
 ```
@@ -341,7 +345,8 @@ Then `luacheck-nix/flake.nix` passes the lockfile to the builder:
 
 ```nix
 {
-  inputs.luarocks-purifier.url = "github:nix-purifiers/luarocks-purifier";
+  inputs.luarocks-purifier.url =
+    "github:nix-purifiers/luarocks-purifier";
   inputs.nixpkgs.follows = "luarocks-purifier/nixpkgs";
   inputs.luacheck = {
     url = "github:lunarmodules/luacheck/v1.2.0";
@@ -358,7 +363,9 @@ Then `luacheck-nix/flake.nix` passes the lockfile to the builder:
     let
       pkgs = import nixpkgs {
         system = "x86_64-linux";
-        overlays = [ luarocks-purifier.overlays.default ];
+        overlays = [
+          luarocks-purifier.overlays.default
+        ];
       };
     in
     {
