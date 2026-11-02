@@ -40,8 +40,9 @@ runs LuaRocks itself, with the locked files in place of the network. The
 development loop is LuaRocks' own commands, run on the locked files:
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- luarocks make
-nix run github:nix-purifiers/luarocks-purifier -- luarocks test
+nix shell 'github:nix-purifiers/luarocks-purifier'
+luarocks-purifier luarocks make
+luarocks-purifier luarocks test
 ```
 
 `luarocks-purifier luarocks ARGS...` runs `luarocks ARGS...` with the rocks
@@ -53,7 +54,8 @@ there.
 To add a dependency, change the rockspec and lock again:
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- lock
+nix shell 'github:nix-purifiers/luarocks-purifier'
+luarocks-purifier lock
 ```
 
 `lock` keeps the versions that `luarocks.lock` pins. A project often has no
@@ -64,7 +66,8 @@ newer versions, run `update`, with the names of the rocks to move or with
 none to move them all:
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- update \
+nix shell 'github:nix-purifiers/luarocks-purifier'
+luarocks-purifier update \
   argparse
 ```
 
@@ -187,7 +190,8 @@ purifier from that package set or pass a compatible toolchain to the builder.
 ## Working offline
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- prefetch
+nix shell 'github:nix-purifiers/luarocks-purifier'
+luarocks-purifier prefetch
 ```
 
 realizes everything the development loop needs in the Nix store and keeps
@@ -287,10 +291,11 @@ projects.
 the release you want to package, and lock it:
 
 ```zsh
+nix shell 'github:nix-purifiers/luarocks-purifier'
 git clone --branch v1.2.0 \
   https://github.com/lunarmodules/luacheck
 cd luacheck
-nix run github:nix-purifiers/luarocks-purifier -- lock
+luarocks-purifier lock
 ```
 
 The lockfile `luarocks-purifier.lock.json` records every rock luacheck
@@ -312,8 +317,9 @@ in
 To work on luacheck, run the development commands in the checkout:
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- prefetch
-nix run github:nix-purifiers/luarocks-purifier -- luarocks make
+nix shell 'github:nix-purifiers/luarocks-purifier'
+luarocks-purifier prefetch
+luarocks-purifier luarocks make
 ```
 
 ### Keep the lockfiles outside the repository
@@ -324,9 +330,10 @@ own `flake.nix`, and takes luacheck as an input that is not a flake. Lock
 from a checkout, and name the lockfile with `--lockfile`:
 
 ```zsh
+nix shell 'github:nix-purifiers/luarocks-purifier'
 mkdir luacheck-nix
 cd luacheck
-nix run github:nix-purifiers/luarocks-purifier -- lock \
+luarocks-purifier lock \
   --lockfile ../luacheck-nix/luarocks-purifier.lock.json
 ```
 
@@ -368,9 +375,10 @@ Build it with `nix run path:. -- --version` in `luacheck-nix`. In the
 checkout, the development commands name the same lockfile:
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- prefetch \
+nix shell 'github:nix-purifiers/luarocks-purifier'
+luarocks-purifier prefetch \
   --lockfile ../luacheck-nix/luarocks-purifier.lock.json
-nix run github:nix-purifiers/luarocks-purifier -- luarocks \
+luarocks-purifier luarocks \
   --lockfile ../luacheck-nix/luarocks-purifier.lock.json make
 ```
 
