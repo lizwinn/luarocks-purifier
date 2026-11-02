@@ -5,12 +5,6 @@ Nix-resolved dependencies. Use the normal build and test commands in your
 working tree; building the project itself in the Nix sandbox is an
 optional next step.
 
-It follows the [purifier contract](https://github.com/nix-purifiers/purifier/blob/main/CONTRACT.md).
-
-luarocks-purifier is one of the [nix-purifiers](https://github.com/nix-purifiers),
-and it meets their contract: the same builder interface, commands, checks
-and README sections as every other purifier.
-
 ## Installation
 
 Install the integration into your Nix profile once:
