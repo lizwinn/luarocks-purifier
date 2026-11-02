@@ -380,8 +380,6 @@ nix run github:nix-purifiers/luarocks-purifier -- luarocks --lockfile ../luachec
 ## Credits
 
 The purifier idea was inspired by nixcloud's
-[cargo (libnix)](https://github.com/nixcloud/cargo). luarocks-purifier
-follows the design of
-[sbt-purifier](https://github.com/nix-purifiers/sbt-purifier), and fetches
-with the shared [purifier](https://github.com/nix-purifiers/purifier)
-library. luarocks-purifier is under the MIT license.
+[cargo (libnix)](https://github.com/nixcloud/cargo).
+
+Released under the MIT license; see [LICENSE](LICENSE).
