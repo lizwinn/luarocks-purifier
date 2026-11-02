@@ -74,7 +74,8 @@ newer versions, run `update`, with the names of the rocks to move or with
 none to move them all:
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- update argparse
+nix run github:nix-purifiers/luarocks-purifier -- update \
+  argparse
 ```
 
 LuaRocks has no update command of its own, so `update` drops those pins,
@@ -113,7 +114,8 @@ builder directly:
   inputs.luarocks-purifier.url = "github:nix-purifiers/luarocks-purifier";
   inputs.nixpkgs.follows = "luarocks-purifier/nixpkgs";
 
-  outputs = { nixpkgs, luarocks-purifier, ... }:
+  outputs =
+    { nixpkgs, luarocks-purifier, ... }:
     let
       pkgs = import nixpkgs {
         system = "x86_64-linux";
@@ -122,7 +124,8 @@ builder directly:
     in
     {
       packages.x86_64-linux.default =
-        (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.app;
+        (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; })
+        .packages.app;
     };
 }
 ```
@@ -173,15 +176,15 @@ For an ad hoc build, the builder can also be evaluated directly from the
 project root. Replace the example package name with one from your project:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/luarocks-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.app'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/luarocks-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; })
+.packages.app'
 ```
 
 This uses the purifier's pinned nixpkgs, matching the lock command above.
@@ -294,7 +297,8 @@ projects.
 the release you want to package, and lock it:
 
 ```zsh
-git clone --branch v1.2.0 https://github.com/lunarmodules/luacheck
+git clone --branch v1.2.0 \
+  https://github.com/lunarmodules/luacheck
 cd luacheck
 nix run github:nix-purifiers/luarocks-purifier -- lock
 ```
@@ -303,15 +307,15 @@ The lockfile `luarocks-purifier.lock.json` records every rock luacheck
 needs, with a hash for each. Build luacheck from the checkout and run it:
 
 ```zsh
-nix build --impure --expr '
-  let
-    purifier = builtins.getFlake "github:nix-purifiers/luarocks-purifier";
-    pkgs = import purifier.inputs.nixpkgs {
-      system = builtins.currentSystem;
-      overlays = [ purifier.overlays.default ];
-    };
-  in
-  (pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; }).packages.luacheck'
+nix build --impure --expr 'let
+  purifier = builtins.getFlake "github:nix-purifiers/luarocks-purifier";
+  pkgs = import purifier.inputs.nixpkgs {
+    system = builtins.currentSystem;
+    overlays = [ purifier.overlays.default ];
+  };
+in
+(pkgs.luarocks-purifier.buildLuarocksProject { src = ./.; })
+.packages.luacheck'
 ./result/bin/luacheck --version
 ```
 
@@ -332,7 +336,8 @@ from a checkout, and name the lockfile with `--lockfile`:
 ```zsh
 mkdir luacheck-nix
 cd luacheck
-nix run github:nix-purifiers/luarocks-purifier -- lock --lockfile ../luacheck-nix/luarocks-purifier.lock.json
+nix run github:nix-purifiers/luarocks-purifier -- lock \
+  --lockfile ../luacheck-nix/luarocks-purifier.lock.json
 ```
 
 Then `luacheck-nix/flake.nix` passes the lockfile to the builder:
@@ -346,7 +351,13 @@ Then `luacheck-nix/flake.nix` passes the lockfile to the builder:
     flake = false;
   };
 
-  outputs = { nixpkgs, luarocks-purifier, luacheck, ... }:
+  outputs =
+    {
+      nixpkgs,
+      luarocks-purifier,
+      luacheck,
+      ...
+    }:
     let
       pkgs = import nixpkgs {
         system = "x86_64-linux";
@@ -367,8 +378,10 @@ Build it with `nix run path:. -- --version` in `luacheck-nix`. In the
 checkout, the development commands name the same lockfile:
 
 ```zsh
-nix run github:nix-purifiers/luarocks-purifier -- prefetch --lockfile ../luacheck-nix/luarocks-purifier.lock.json
-nix run github:nix-purifiers/luarocks-purifier -- luarocks --lockfile ../luacheck-nix/luarocks-purifier.lock.json make
+nix run github:nix-purifiers/luarocks-purifier -- prefetch \
+  --lockfile ../luacheck-nix/luarocks-purifier.lock.json
+nix run github:nix-purifiers/luarocks-purifier -- luarocks \
+  --lockfile ../luacheck-nix/luarocks-purifier.lock.json make
 ```
 
 ## Credits
